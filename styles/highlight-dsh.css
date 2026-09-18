@@ -1,0 +1,99 @@
+/* ============================================================================
+   highlight-dsh.css —— 把 highlight.js 的类名映射到 dsh 的语法配色。
+
+   dsh 用 shiki（css-variables 主题）产出 style="color:var(--shiki-token-*)"，
+   真正的颜色在 styles/shiki.css 里（浅色一套、暗色一套）。
+   本文件做的就是同一件事的另一半：让 highlight.js 产出的 .hljs-* 类名
+   指向同一批 --shiki-* 变量，于是配色与 dsh 完全一致，且自动跟随深浅主题。
+   ============================================================================ */
+
+.md-code-block .hljs,
+.md-code-block code.hljs {
+  background: none;
+  color: var(--shiki-foreground);
+}
+
+/* 关键字 / 标签 / 字面量：dsh 的 keyword 色（浅色洋红、暗色粉） */
+.hljs-keyword,
+.hljs-literal,
+.hljs-selector-tag,
+.hljs-name,
+.hljs-doctag,
+.hljs-strong {
+  color: var(--shiki-token-keyword);
+}
+
+/* 字符串 */
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta .hljs-string,
+.hljs-template-tag {
+  color: var(--shiki-token-string);
+}
+
+/* 注释：最暗的一档，斜体（与 dsh 的 fontStyle: true 一致） */
+.hljs-comment,
+.hljs-quote {
+  color: var(--shiki-token-comment);
+  font-style: italic;
+}
+
+/* 数字 / 常量 / 类型 / 内置：dsh 的 constant 色（蓝） */
+.hljs-number,
+.hljs-built_in,
+.hljs-type,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
+  color: var(--shiki-token-constant);
+}
+
+/* 函数名 / 章节标题：dsh 的 function 色（紫） */
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-selector-id {
+  color: var(--shiki-token-function);
+}
+
+/* 属性 / 变量 / 参数：dsh 的 parameter 色（橙） */
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-property {
+  color: var(--shiki-token-parameter);
+}
+
+/* 标点与运算符：dsh 的 punctuation 色（灰） */
+.hljs-punctuation,
+.hljs-operator,
+.hljs-subst {
+  color: var(--shiki-token-punctuation);
+}
+
+/* 链接与元信息 */
+.hljs-link,
+.hljs-meta,
+.hljs-meta .hljs-keyword {
+  color: var(--shiki-token-link);
+}
+
+/* diff 增删：借用 dsh 的成功/错误色（与它的 diff 卡片一致） */
+.hljs-deletion {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.hljs-addition {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+/* 强调 */
+.hljs-emphasis {
+  font-style: italic;
+}
