@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>measure —— 用真实浏览器量算按钮样式</title>
+<style>
+  body { font: 12px/1.45 Consolas, monospace; margin: 10px; }
+  #out { white-space: pre-wrap; }
+  iframe { width: 1400px; height: 880px; border: 1px solid #ccc; margin-top: 10px; }
+</style>
+</head>
+<body>
+<pre id="out">measuring…</pre>
+<iframe id="frame" src="/"></iframe>
+<script>
+/*
+  把 index.html 装进同源 iframe，用 getComputedStyle 量出"真实浏览器算完之后"的颜色。
+  两个要点（踩过坑）：
+    1. 先注入 * { transition: none } —— 否则主题切换的过渡动画会让你量到中间值，
+       看起来像"同一个变量在不同元素上解析成了不同颜色"；
+    2. 主题要显式点按钮强制，别依赖系统（本机系统是深色）。
+  跑法：chrome --headless=new --dump-dom --virtual-time-budget=12000 http://127.0.0.1:4321/tools/measure.html
+*/
+const out = [];
+const log = (line) => out.push(line);
+const frame = document.getElementById('frame');
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const TARGETS = [
+  ['侧栏 打开文件(.btn.block)', '#btn-open-file'],
+  ['顶栏 图标按钮(.icon-btn)', '.topbar .icon-btn'],
+  ['分段 未选中', '.segmented button:not([aria-pressed="true"])'],
+  ['分段 选中', '.segmented button[aria-pressed="true"]'],
+  ['空状态 卡片', '#card-open'],
+  ['空状态 按钮', '#btn-sample'],
+  ['色板 无背景', '.swatch.plain'],
+  ['左下角 设置座位', '.settings-seat'],
+  ['参照 侧栏面板', '.sidebar'],
+  ['参照 顶栏面板', '.topbar'],
+];
+
+function measure(doc, tag) {
+  log('===== ' + tag + ' =====');
+  log('body 有 data-ds-dark-theme: ' + (doc.body.hasAttribute('data-ds-dark-theme') ? 'yes' : 'no'));
+  for (const [label, selector] of TARGETS) {
+    const el = doc.querySelector(selector);
+    if (el === null) { log(label + ': 找不到 ' + selector); continue; }
+    const cs = doc.defaultView.getComputedStyle(el);
+    log(label.padEnd(26) + ' bg=' + cs.getPropertyValue('background-color').padEnd(24)
+      + ' 边=' + (cs.getPropertyValue('border-top-width') + ' ' + cs.getPropertyValue('border-top-style') + ' ' + cs.getPropertyValue('border-top-color')).padEnd(34)
+      + ' 磨砂=' + cs.getPropertyValue('backdrop-filter').slice(0, 26));
+  }
+  const root = doc.defaultView.getComputedStyle(doc.documentElement);
+  const body = doc.defaultView.getComputedStyle(doc.body);
+  log('变量  html: veil=' + root.getPropertyValue('--btn-glass-veil').trim() + ' alpha=' + root.getPropertyValue('--btn-glass-alpha').trim()
+    + ' | body: veil=' + body.getPropertyValue('--btn-glass-veil').trim() + ' alpha=' + body.getPropertyValue('--btn-glass-alpha').trim()
+    + ' alpha-on=' + body.getPropertyValue('--btn-glass-alpha-on').trim());
+}
+
+frame.addEventListener('load', async () => {
+  const doc = frame.contentDocument;
+  const win = frame.contentWindow;
+  await wait(600);
+  const style = doc.createElement('style');
+  style.textContent = '*, *::before, *::after { transition: none !important; animation: none !important; }';
+  doc.head.appendChild(style);
+  out.length = 0;
+  log('系统 prefers-color-scheme: dark = ' + win.matchMedia('(prefers-color-scheme: dark)').matches);
+  doc.querySelector('[data-theme="light"]').click();
+  await wait(500);
+  measure(doc, '强制浅色');
+  doc.querySelector('[data-theme="dark"]').click();
+  await wait(500);
+  measure(doc, '强制深色');
+
+  // 设置弹层：入口在左下角，所以它必须翻到按钮上方并完整落在视口里
+  doc.getElementById('btn-settings').click();
+  await wait(300);
+  const pop = doc.getElementById('popover');
+  const seat = doc.getElementById('btn-settings').getBoundingClientRect();
+  const box = pop.getBoundingClientRect();
+  const inside = box.top >= 0 && box.left >= 0 && box.bottom <= win.innerHeight && box.right <= win.innerWidth;
+  const above = box.bottom <= seat.top + 1;
+  log('设置弹层  left=' + Math.round(box.left) + '（座位 left=' + Math.round(seat.left) + '）  bottom=' + Math.round(box.bottom) + '（座位 top=' + Math.round(seat.top) + '）  视口=' + win.innerWidth + 'x' + win.innerHeight);
+  log('设置弹层  完整在视口内=' + (inside ? 'yes' : 'no') + '  开在座位上方=' + (above ? 'yes' : 'no'));
+  log('===== 结束 =====');
+  document.getElementById('out').textContent = out.join('\n');
+});
+</script>
+</body>
+</html>

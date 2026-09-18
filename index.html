@@ -15,64 +15,93 @@
 
   <!-- ② 从 dsh 的 markdown 渲染搬过来的样式（1:1） -->
   <link rel="stylesheet" href="styles/markdown.css">
-  <!-- ③ 把 highlight.js 的类名映射到 dsh 的 --shiki-* 语法色 -->
+  <!-- ③ highlight.js 类名 → dsh 的 --shiki-* 语法色 -->
   <link rel="stylesheet" href="styles/highlight-dsh.css">
-  <!-- ④ 公式（KaTeX 自带样式，dsh 用的是同一个库） -->
+  <!-- ④ 公式（KaTeX，dsh 用的也是它） -->
   <link rel="stylesheet" href="vendor/katex.min.css">
 
   <!-- ⑤ 阅读器自己的壳与控件 -->
   <link rel="stylesheet" href="styles/reader.css">
   <link rel="stylesheet" href="styles/controls.css">
+  <!-- ⑥ 可调参数：放在最后，覆盖上面所有默认值（改外观只改这一个文件） -->
+  <link rel="stylesheet" href="styles/tuning.css">
 </head>
 
-<!-- 暗色模式：给 body 加 data-ds-dark-theme 属性即可（dsh 的机制）。
-     这两个属性还会被阅读器用来控制侧栏开合与是否正在阅读。 -->
+<!-- data-ds-dark-theme 由 JS 按设置写在这里；其余 data-* 是视图状态 -->
 <body data-sidebar="open" data-reading="false" data-bg-mode="preset" data-code-wrap="on">
 
-  <!-- 背景层：图片/渐变 + 模糊，遮罩由 CSS 按主题自动选 -->
   <div class="bg" id="bg" aria-hidden="true"></div>
-
-  <!-- 顶部阅读进度条 -->
   <div class="progress" aria-hidden="true"><i id="progress-bar"></i></div>
 
+  <!-- 侧栏收起后的"拉出"按钮：一个小圆，浮在舞台左上角（侧栏展开时它自己藏起来） -->
+  <button class="sidebar-pull" id="btn-sidebar" type="button" title="显示侧栏（\ 键）" aria-label="显示侧栏">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+  </button>
+
+  <!-- 全局设置的座位：固定在左下角。
+       它是"全局"入口（不属于某一篇文档），所以从顶栏搬到这里；侧栏展开时它压在侧栏底部
+       （侧栏里为它留了空白），侧栏收起后它仍然留在舞台上——否则一收侧栏入口就没了。 -->
+  <button class="settings-seat" id="btn-settings" type="button" title="设置（全局）" aria-label="设置">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 12h4M12 12h8M4 17h10M18 17h2"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="16" cy="17" r="2"/></svg>
+    <span>设置</span>
+  </button>
+
   <div class="app">
-    <!-- 侧栏：文件列表（服务模式）+ 本页目录 -->
+    <!-- ══════════ 侧栏 ══════════
+         结构：头部（品牌 + 根目录 + 分段切换）/ 主体（文档页 或 目录页）。
+         收起按钮放在自己头上——它是这一栏的状态，不属于"设置"。 -->
     <aside class="sidebar glass" id="sidebar" aria-label="导航">
-      <div class="sidebar-brand">
-        <span class="dot" aria-hidden="true"></span>
-        <span>Markdown 阅读器</span>
-        <span class="root-name" id="root-name"></span>
+      <div class="sidebar-head">
+        <div class="brand">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="brand-name">Markdown 阅读器</span>
+          <button class="icon-btn tiny" id="btn-collapse" type="button" title="收起侧栏（\ 键）" aria-label="收起侧栏">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+          </button>
+        </div>
+        <div class="root-line" id="root-line" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>
+          <span class="root-name" id="root-name"></span>
+          <button class="icon-btn tiny" id="btn-open-folder" type="button" title="打开文件夹（Chrome/Edge 原生能力；服务模式下由启动参数决定根目录）" aria-label="打开文件夹">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
+          </button>
+        </div>
       </div>
 
-      <div class="sidebar-section files" id="files-section" hidden>
-        <div class="section-label">文档</div>
-        <div id="file-list"></div>
-      </div>
+      <!-- 侧栏主体：上下两个区，中间一条可拖动的分隔线 -->
+      <div class="sidebar-body" id="sidebar-body">
+        <!-- 文档区：打开文件 + 打开的文档 + 可折叠文件树（高度自适应，有上限） -->
+        <div class="pane pane-docs" id="pane-docs">
+          <button class="btn block" id="btn-open-file" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span>打开文件</span>
+            <span class="kbd-hint">Ctrl+O</span>
+          </button>
+          <div class="section-label" id="open-docs-label" hidden>打开的文档</div>
+          <div class="list" id="doc-list"></div>
+          <div class="section-label" id="files-label" hidden>全部文件</div>
+          <div class="tree" id="file-tree"></div>
+          <div class="sidebar-empty" id="docs-empty">拖入 .md 文件，或点上面的「打开文件」</div>
+        </div>
 
-      <div class="sidebar-divider" id="files-divider" hidden></div>
-
-      <div class="sidebar-section toc" id="toc-section">
-        <div class="section-label">本页目录</div>
-        <div id="toc"></div>
+        <!-- 目录区：本篇文档的标题（与文档区共用同一个滚动容器） -->
+        <div class="pane pane-toc" id="pane-toc">
+          <div class="section-label">本页目录</div>
+          <div class="list" id="toc"></div>
+        </div>
       </div>
     </aside>
 
-    <!-- 主舞台 -->
+    <!-- ══════════ 主舞台 ══════════ -->
     <main class="stage" id="stage">
       <header class="topbar glass">
-        <button class="icon-btn" id="btn-sidebar" type="button" title="显示/隐藏侧栏（\ 键）" aria-label="显示或隐藏侧栏">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/><path d="M12.5 9h5M12.5 13h5"/></svg>
-        </button>
         <div class="title-wrap">
           <div class="doc-title" id="doc-title">还没有打开文档</div>
-          <div class="doc-meta" id="doc-meta">拖入 .md 文件，或按 ⌘/Ctrl+O 选择</div>
+          <div class="doc-meta" id="doc-meta">拖入 .md 文件，或按 Ctrl/Cmd+O 选择</div>
         </div>
         <div class="tools">
-          <button class="icon-btn" id="btn-search" type="button" title="文内搜索（/ 或 ⌘/Ctrl+F）" aria-label="文内搜索">
+          <button class="icon-btn" id="btn-search" type="button" title="文内搜索（/ 或 Ctrl+F）" aria-label="文内搜索">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.6-3.6"/></svg>
-          </button>
-          <button class="icon-btn" id="btn-open" type="button" title="打开文件（⌘/Ctrl+O）" aria-label="打开文件">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>
           </button>
           <div class="segmented" role="group" aria-label="主题">
             <button type="button" data-theme="system" title="跟随系统" aria-label="跟随系统">
@@ -85,29 +114,62 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
             </button>
           </div>
-          <button class="icon-btn" id="btn-settings" type="button" title="阅读设置" aria-label="阅读设置">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 12h4M12 12h8M4 17h10M18 17h2"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="16" cy="17" r="2"/></svg>
-          </button>
-          <button class="icon-btn" id="btn-print" type="button" title="打印 / 导出 PDF（⌘/Ctrl+P）" aria-label="打印">
+          <button class="icon-btn" id="btn-print" type="button" title="打印 / 导出 PDF（Ctrl+P）" aria-label="打印">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="2"/><path d="M7 16h10v4H7z"/></svg>
           </button>
         </div>
       </header>
 
-      <!-- 空状态 -->
       <section class="empty glass" id="empty">
-        <h1>Markdown 阅读器</h1>
-        <p>把 .md 文件拖进窗口，或点下面的按钮。<br>排版与 DeepSeek Harness 的聊天正文一致。</p>
-        <div class="actions">
-          <button class="btn primary" id="btn-open-2" type="button">打开 .md 文件</button>
-          <button class="btn" id="btn-sample" type="button">看一篇示例</button>
+        <div class="empty-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 6h13l9 9v27a2 2 0 0 1-2 2H13a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+            <path d="M26 6v9h9"/>
+            <path d="M17 26h14M17 33h9"/>
+          </svg>
         </div>
-        <div class="hint">
-          <kbd>/</kbd> 搜索 · <kbd>\</kbd> 侧栏 · <kbd>T</kbd> 主题 · <kbd>Esc</kbd> 退出
+        <h1>Markdown 阅读器</h1>
+        <p class="empty-sub">排版与 DeepSeek Harness 的聊天正文一致，字号、行距、背景都可以调。<br>把 .md 文件拖进窗口，或选一种方式打开：</p>
+
+        <!-- 三张卡按当前环境显隐：服务模式藏"打开文件夹"，静态模式藏"从左侧选择" -->
+        <div class="empty-cards">
+          <button class="empty-card" id="card-open" type="button">
+            <span class="card-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"/><path d="M13 3v6h6"/><path d="M12 12v6M9 15h6"/></svg>
+            </span>
+            <span class="card-text">
+              <span class="card-title">打开文件</span>
+              <span class="card-note">Ctrl / ⌘ + O，也可以一次选多个</span>
+            </span>
+          </button>
+
+          <button class="empty-card" id="card-folder" type="button">
+            <span class="card-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/><path d="M12 11v4M10 13h4"/></svg>
+            </span>
+            <span class="card-text">
+              <span class="card-title">打开文件夹</span>
+              <span class="card-note">读一整个目录 · Chrome / Edge</span>
+            </span>
+          </button>
+
+          <button class="empty-card" id="card-browse" type="button" hidden>
+            <span class="card-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/><path d="M13 9h5M13 13h5"/></svg>
+            </span>
+            <span class="card-text">
+              <span class="card-title">从左侧选择</span>
+              <span class="card-note">这个目录里已经有文档了</span>
+            </span>
+          </button>
+        </div>
+
+        <div class="empty-foot">
+          <button class="btn" id="btn-sample" type="button">看一篇示例</button>
+          <span class="empty-keys"><kbd>/</kbd> 搜索 · <kbd>T</kbd> 深浅色 · <kbd>\</kbd> 侧栏 · <kbd>Alt</kbd>+<kbd>1..9</kbd> 切文档</span>
         </div>
       </section>
 
-      <!-- 正文 -->
       <article class="doc glass" id="doc">
         <div class="markdown" id="content"></div>
       </article>
@@ -117,6 +179,12 @@
         <span id="foot-right"></span>
       </footer>
     </main>
+  </div>
+
+  <!-- 跳转提示条：跳完给你一条"回到原处"的退路 -->
+  <div class="jump-chip glass" id="jump-chip" hidden role="status">
+    <span>已跳到 <strong id="jump-title"></strong></span>
+    <button class="btn tiny" id="jump-back" type="button">回到原处</button>
   </div>
 
   <!-- 搜索条 -->
@@ -135,79 +203,68 @@
     </button>
   </div>
 
-  <!-- 设置面板 -->
-  <div class="popover glass" id="popover" hidden role="dialog" aria-label="阅读设置">
-    <div class="pop-section">
-      <h3>主题</h3>
-      <div class="pop-row">
-        <span class="label">外观</span>
-        <div class="segmented" role="group" aria-label="外观模式">
-          <button type="button" data-theme-opt="system" aria-label="跟随系统">自</button>
-          <button type="button" data-theme-opt="light" aria-label="浅色">浅</button>
-          <button type="button" data-theme-opt="dark" aria-label="深色">深</button>
-        </div>
-      </div>
-      <div class="pop-row">
-        <span class="label">正文用衬线字体</span>
-        <button class="switch" id="sw-serif" type="button" role="switch" aria-pressed="false" aria-label="正文用衬线字体"></button>
-      </div>
+  <!-- ══════════ 设置面板：两页（排版 / 背景）══════════
+       只放"偏好"。界面自身的部件（侧栏开关、主题切换）不进来：
+         · 侧栏的开合属于侧栏自己（它头上有收起按钮，收起后舞台左上角有拉出按钮）；
+         · 主题在顶栏常驻，放这里只会重复。
+       每个数值项都是「滑杆 + 可直接输入的数字框」：拖快、输入准。 -->
+  <div class="popover glass" id="popover" hidden role="dialog" aria-label="设置">
+    <div class="segmented wide pop-tabs" role="tablist" aria-label="设置分类">
+      <button type="button" data-ptab="type" role="tab" aria-pressed="true">排版</button>
+      <button type="button" data-ptab="bg" role="tab" aria-pressed="false">背景</button>
     </div>
 
-    <div class="pop-section">
-      <h3>阅读</h3>
-      <div class="pop-row stack">
-        <span class="label">字号 <span class="value" id="v-scale" style="float:right"></span></span>
+    <div class="pop-pane" id="pop-type">
+      <div class="pop-row"><span class="label">正文用衬线字体</span><button class="switch" id="sw-serif" type="button" role="switch" aria-pressed="false" aria-label="正文用衬线字体"></button></div>
+      <div class="field">
+        <div class="field-head"><span class="label">字号</span><span class="field-input"><input class="num" id="n-scale" type="number" min="85" max="140" step="1" inputmode="numeric"><span class="suffix">%</span></span></div>
         <input class="range" id="r-scale" type="range" min="0.85" max="1.4" step="0.01" aria-label="字号">
       </div>
-      <div class="pop-row stack">
-        <span class="label">行距 <span class="value" id="v-leading" style="float:right"></span></span>
-        <input class="range" id="r-leading" type="range" min="0.9" max="1.5" step="0.01" aria-label="行距">
+      <div class="field">
+        <div class="field-head"><span class="label">行距</span><span class="field-input"><input class="num" id="n-leading" type="number" min="80" max="150" step="1" inputmode="numeric"><span class="suffix">%</span></span></div>
+        <input class="range" id="r-leading" type="range" min="0.8" max="1.5" step="0.01" aria-label="行距">
       </div>
-      <div class="pop-row stack">
-        <span class="label">栏宽 <span class="value" id="v-width" style="float:right"></span></span>
+      <div class="field">
+        <div class="field-head"><span class="label">栏宽</span><span class="field-input"><input class="num" id="n-width" type="number" min="560" max="1000" step="10" inputmode="numeric"><span class="suffix">px</span></span></div>
         <input class="range" id="r-width" type="range" min="560" max="1000" step="10" aria-label="栏宽">
       </div>
-      <div class="pop-row">
-        <span class="label">代码块自动换行</span>
-        <button class="switch" id="sw-wrap" type="button" role="switch" aria-pressed="true" aria-label="代码块自动换行"></button>
-      </div>
-      <div class="pop-row">
-        <span class="label">显示侧栏</span>
-        <button class="switch" id="sw-sidebar" type="button" role="switch" aria-pressed="true" aria-label="显示侧栏"></button>
-      </div>
+      <div class="pop-row"><span class="label">代码块自动换行</span><button class="switch" id="sw-wrap" type="button" role="switch" aria-pressed="true" aria-label="代码块自动换行"></button></div>
+      <p class="pop-note">默认值就是 dsh 聊天正文的排版：16px/28px、栏宽 748px。</p>
     </div>
 
-    <div class="pop-section">
-      <h3>背景</h3>
+    <div class="pop-pane" id="pop-bg" hidden>
+      <div class="field-head"><span class="label">最近使用</span><span class="hint-inline">点一下换回来</span></div>
+      <div class="recents" id="recents"></div>
+      <div class="field-head" style="margin-top:14px"><span class="label">内置背景</span></div>
       <div class="swatches" id="swatches"></div>
-      <div class="pop-row stack" style="margin-top:12px">
-        <span class="label">模糊 <span class="value" id="v-blur" style="float:right"></span></span>
+      <div class="field" id="field-blur">
+        <div class="field-head"><span class="label">模糊</span><span class="field-input"><input class="num" id="n-blur" type="number" min="0" max="48" step="1" inputmode="numeric"><span class="suffix">px</span></span></div>
         <input class="range" id="r-blur" type="range" min="0" max="48" step="1" aria-label="背景模糊">
       </div>
-      <div class="pop-row stack">
-        <span class="label">压暗 / 提亮 <span class="value" id="v-dim" style="float:right"></span></span>
+      <div class="field" id="field-dim">
+        <div class="field-head"><span class="label">压暗 / 提亮</span><span class="field-input"><input class="num" id="n-dim" type="number" min="0" max="70" step="1" inputmode="numeric"><span class="suffix">%</span></span></div>
         <input class="range" id="r-dim" type="range" min="0" max="0.7" step="0.01" aria-label="背景遮罩强度">
       </div>
-      <div class="pop-row stack">
-        <span class="label">玻璃面板不透明度 <span class="value" id="v-glass" style="float:right"></span></span>
+      <div class="field">
+        <div class="field-head"><span class="label">玻璃面板不透明度</span><span class="field-input"><input class="num" id="n-glass" type="number" min="20" max="95" step="1" inputmode="numeric"><span class="suffix">%</span></span></div>
         <input class="range" id="r-glass" type="range" min="0.2" max="0.95" step="0.01" aria-label="玻璃面板不透明度">
       </div>
-      <div class="pop-row">
-        <span class="label">恢复默认设置</span>
-        <button class="btn" id="btn-reset" type="button">重置</button>
-      </div>
+      <p class="pop-note" id="bg-note">深色模式下遮罩会自动加强，保证正文对比度。</p>
+    </div>
+
+    <div class="pop-foot">
+      <button class="btn" id="btn-reset" type="button">恢复默认</button>
+      <span class="pop-foot-note">设置会记住</span>
     </div>
   </div>
 
-  <!-- 图片灯箱 / 轻提示 / 移动端遮罩 / 拖放提示 -->
   <div class="lightbox" id="lightbox" hidden><img id="lightbox-img" alt=""></div>
   <div class="toast glass" id="toast" role="status" aria-live="polite"></div>
   <div class="scrim" id="scrim"></div>
   <div class="drop-hint" id="drop-hint">松手即可打开这个 Markdown 文件</div>
 
-  <input type="file" id="file-input" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown" hidden>
+  <input type="file" id="file-input" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown" hidden multiple>
 
-  <!-- 依赖全部是本地文件：断网可用、也不经过任何 CDN -->
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/highlight.min.js"></script>
   <script src="vendor/purify.min.js"></script>

@@ -1,0 +1,12 @@
+# 生成物：跑构建脚本会重新产出，不入库
+markdown-reader.html
+share/
+markdown-reader-share.zip
+
+# 运行时文件：启动服务时写下进程记录
+.md-reader.pid
+
+# 平台专用的临时启动工具（本机是 WSL，用不到这两个）
+start.bat
+stop.bat
+start.command

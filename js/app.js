@@ -20,6 +20,24 @@
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel))
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi)
 
+  /**
+   * 读一个 CSS 变量当像素值用。
+   * 缩进这类数值既要在 styles/tuning.css 里可调、JS 渲染时又要用，
+   * 所以统一从那里读，避免 CSS 与 JS 各写一份数字、改了一处忘了另一处。
+   * @param {string} name 变量名（如 '--toc-indent'）
+   * @param {number} fallback 读不到时的兜底值
+   * @returns {number} 像素数
+   */
+  function tuningPx(name, fallback) {
+    try {
+      const raw = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      const value = Number.parseFloat(raw);
+      return Number.isFinite(value) ? value : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
   /** 正文容器与滚动容器：其余函数几乎都围着这两个转。 */
   const content = $('content')
   const stage = $('stage')
@@ -63,11 +81,28 @@
     }
   }
 
-  // ─────────────────────────── 2. 设置 ───────────────────────────
+  // ─────────────────────────── 2. 设置与持久化 ───────────────────────────
 
-  const SETTINGS_KEY = 'md-reader:settings:v1'
-  const IMAGE_KEY = 'md-reader:bg-image:v1'
+  /*
+     持久化分工（这是有意的边界）：
+       localStorage —— 设置、视图状态、每篇文档的阅读位置。都很小，同步读写。
+       IndexedDB    —— 背景图片。图很大（几百 KB 到 1MB），localStorage 那 5MB 装不下几张。
+     不保存的东西：打开过的文件、最近文件列表。阅读器只负责"怎么渲染"，不负责"你读过什么"。
+  */
 
+  const SETTINGS_KEY = 'md-reader:settings:v4'
+  // 老键只在读取时兜底：搬过来之后下次保存就写到 v4，它们自然作废
+  const LEGACY_SETTINGS_KEYS = ['md-reader:settings:v3', 'md-reader:settings:v2', 'md-reader:settings:v1']
+  const LEGACY_IMAGE_KEY = 'md-reader:bg-image:v1'
+  const MAX_RECENTS = 5
+
+  /*
+     下面这些是"阅读偏好"的出厂默认值——改这里等于改所有新访客的初始状态
+     （已经用过的浏览器里，localStorage 存着的那份会盖住这里的值；想让它生效，
+      点设置面板里的"恢复默认"，或者清掉 md-reader:settings:v4）。
+
+     尺码类的东西（侧栏宽度、行高、圆角、玻璃模糊……）不在这里，在 styles/tuning.css。
+  */
   const DEFAULTS = {
     theme: 'system',      // system | light | dark
     serif: false,         // 正文是否用衬线字体
@@ -75,23 +110,48 @@
     leading: 1,           // 行距倍数
     width: 748,           // 阅读栏宽（748 = dsh 聊天正文宽度）
     wrapCode: true,       // 代码块是否自动换行（dsh 默认换行）
-    sidebar: true,
-    bgMode: 'preset',     // preset | image | none
-    bgPreset: 'aurora',
+    sidebar: true,        // 侧栏展开/收起（视图状态，但记住更省事）
+    bgMode: 'none',       // none（极简的黑白渐变）| preset（内置渐变）| image（自己的图）
+    bgPreset: 'aurora',   // 选 preset 时才用得上：见下面 PRESETS 的第一项
+    bgImageKey: null,     // 当前自定义背景在 IndexedDB 里的键
     bgBlur: 22,
     bgDim: 0.3,
-    glassAlpha: 0.72,
+    glassAlpha: 0.5,      // 面板不透明度（越透，背景的颜色越能透到按钮上）
+    recents: [],          // 最近用过的背景：[{ kind: 'preset', id } | { kind: 'image', key }]
   }
 
   let settings = Object.assign({}, DEFAULTS)
-  let bgImage = null
+  let bgImage = null;   // 当前背景图的 dataURL（从 IndexedDB 取出来缓存在内存里）
 
-  try {
-    Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'))
-    bgImage = localStorage.getItem(IMAGE_KEY)
-  } catch {
-    // 隐私模式或 file:// 下 localStorage 可能不可用：用默认值继续，不打断阅读
+  /*
+     默认值改过的地方集中在这里：只搬"恰好等于老默认值"的那些，自己调过的人原样保留，不去猜他的意图。
+       v2 → v3：默认背景从"极光"改成"无背景"。
+       v3 → v4：面板默认不透明度从 72% 改成 50%（面板越透，背景的颜色越能透到按钮上）。
+  */
+  function migrateSettings(value) {
+    if (value === null || typeof value !== 'object') return value
+    if (value.bgMode === 'preset' && value.bgPreset === 'aurora') value.bgMode = 'none'
+    if (value.glassAlpha === 0.72) value.glassAlpha = 0.5
+    return value
   }
+
+  /** 读取顺序 v4 → v3 → v2 → v1；读到老键时顺手迁移一次。 */
+  function readStoredSettings() {
+    try {
+      const current = localStorage.getItem(SETTINGS_KEY)
+      if (current !== null) return JSON.parse(current)
+      for (const oldKey of LEGACY_SETTINGS_KEYS) {
+        const old = localStorage.getItem(oldKey)
+        if (old === null) continue
+        return migrateSettings(JSON.parse(old))
+      }
+    } catch {
+      // 隐私模式或 file:// 下 localStorage 可能不可用：用默认值继续，不打断阅读
+    }
+    return {}
+  }
+  Object.assign(settings, readStoredSettings());
+  if (!Array.isArray(settings.recents)) settings.recents = [];
 
   function saveSettings() {
     try {
@@ -100,6 +160,88 @@
       // 配额满或被禁用：设置本次仍然生效，只是记不住
     }
   }
+
+  /*
+     一个极简的 IndexedDB 封装（只用到一个对象仓库，键是字符串）。
+     为什么不用 localStorage：5MB 配额装不下几张背景图，而且图片是二进制，
+     IndexedDB 天生适合存大块数据，配额通常几百 MB。
+  */
+  const ImageStore = (() => {
+    const DB_NAME = 'md-reader'
+    const STORE = 'backgrounds'
+    let opening = null
+
+    function open() {
+      if (opening !== null) return opening;
+      opening = new Promise((resolve, reject) => {
+        if (typeof indexedDB === 'undefined') { reject(new Error('no indexedDB')); return }
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = () => {
+          if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE);
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      return opening;
+    }
+
+    function run(mode, work) {
+      return open().then((db) => new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, mode);
+        const store = tx.objectStore(STORE);
+        const request = work(store);
+        tx.oncomplete = () => resolve(request === undefined ? undefined : request.result);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      }));
+    }
+
+    return {
+      put: (key, value) => run('readwrite', (store) => store.put(value, key)),
+      get: (key) => run('readonly', (store) => store.get(key)),
+      del: (key) => run('readwrite', (store) => store.delete(key)),
+      keys: () => run('readonly', (store) => store.getAllKeys()),
+    };
+  })();
+
+  /** 记住一个背景（预设或图片），最近用过的排最前，只留 MAX_RECENTS 个。 */
+  function rememberBackground(entry) {
+    const rest = settings.recents.filter((item) => !(item.kind === entry.kind && (entry.kind === 'preset' ? item.id === entry.id : item.key === entry.key)));
+    settings.recents = [entry, ...rest].slice(0, MAX_RECENTS);
+    saveSettings();
+    void collectGarbage();
+  }
+
+  /** 清理不再被引用的背景图（当前用的 + 最近列表里的都留着）。 */
+  async function collectGarbage() {
+    try {
+      const keep = new Set();
+      if (typeof settings.bgImageKey === 'string') keep.add(settings.bgImageKey);
+      for (const item of settings.recents) if (item.kind === 'image') keep.add(item.key);
+      const keys = await ImageStore.keys();
+      for (const key of keys) if (!keep.has(key)) await ImageStore.del(key);
+    } catch {
+      // IndexedDB 不可用（隐私模式等）：不清理也不影响阅读
+    }
+  }
+
+  /** 把 v1 版本存在 localStorage 里的那张图迁移到 IndexedDB（只做一次）。 */
+  async function migrateLegacyImage() {
+    try {
+      const legacy = localStorage.getItem(LEGACY_IMAGE_KEY);
+      if (legacy === null) return;
+      const key = 'img-legacy';
+      await ImageStore.put(key, legacy);
+      settings.bgImageKey = key;
+      settings.bgMode = 'image';
+      settings.recents = [{ kind: 'image', key }, ...settings.recents].slice(0, MAX_RECENTS);
+      saveSettings();
+      localStorage.removeItem(LEGACY_IMAGE_KEY);
+    } catch {
+      // 迁移失败就当没有旧数据
+    }
+  }
+
 
   // ─────────────────────────── 3. 主题 ───────────────────────────
 
@@ -164,9 +306,23 @@
     // 主题自适应：同样的滑杆位置，深色下遮罩更重（深色背景更容易吃对比度）
     const dim = clamp(settings.bgDim * (isDark() ? 1.2 : 0.85), 0, 0.85);
     root.setProperty('--bg-dim', String(dim));
-    root.setProperty('--glass-alpha', String(settings.glassAlpha));
+    // 写在 body 上而不是 html 上：样式表里 body[data-ds-dark-theme] 也定义了这个变量，
+    // 而"最近的祖先"说了算——写在 html 上会被 body 那条规则盖掉，深色主题下滑杆就成了摆设。
+    document.body.style.setProperty('--glass-alpha', String(settings.glassAlpha));
+
+    // "无背景"模式下模糊/遮罩没有作用对象：把这两行灰掉并在脚下说明，免得以为滑杆坏了
+    const plain = mode === 'none';
+    for (const name of ['field-blur', 'field-dim']) {
+      const field = $(name);
+      field.dataset.off = String(plain);
+      for (const input of field.querySelectorAll('input')) input.disabled = plain;
+    }
+    $('bg-note').textContent = plain
+      ? '「无背景」是一层极淡的黑白渐变（跟随深浅色）；模糊与遮罩只对渐变 / 图片背景生效。'
+      : '深色模式下遮罩会自动加强，保证正文对比度。';
 
     renderSwatches();
+    renderRecents();
   }
 
   /** 画背景预设色板（含"无背景"和"自定义图片"两块）。 */
@@ -190,7 +346,12 @@
       b.title = preset.name;
       b.setAttribute('aria-label', preset.name);
       b.setAttribute('aria-pressed', String(settings.bgMode === 'preset' && settings.bgPreset === preset.id));
-      b.addEventListener('click', () => { settings.bgMode = 'preset'; settings.bgPreset = preset.id; saveSettings(); applyBackground() })
+      b.addEventListener('click', () => {
+        settings.bgMode = 'preset';
+        settings.bgPreset = preset.id;
+        applyBackground();
+        rememberBackground({ kind: 'preset', id: preset.id });
+      })
       box.appendChild(b)
     }
 
@@ -216,8 +377,9 @@
   }
 
   /**
-   * 设定背景图：先等比缩小再转成 dataURL 存起来。
-   * 缩小是必须的——原图动辄几 MB，localStorage 装不下（配额通常 5MB）。
+   * 设定背景图：等比缩小 → 转 dataURL → 存进 IndexedDB → 记入"最近使用"。
+   * 缩小是必须的：原图动辄几 MB，发到浏览器里做模糊既慢又占内存。
+   * @param {File} file 用户选的图片
    */
   async function setBackgroundImage(file) {
     if (!file.type.startsWith('image/')) { toast('请选择图片文件'); return }
@@ -227,14 +389,30 @@
       toast('这张图读不出来');
       return;
     }
+    const key = 'img-' + Date.now().toString(36);
     settings.bgMode = 'image';
-    saveSettings();
+    settings.bgImageKey = key;
     applyBackground();
+    rememberBackground({ kind: 'image', key });
     try {
-      localStorage.setItem(IMAGE_KEY, bgImage);
-      toast('背景已保存');
+      await ImageStore.put(key, bgImage);
     } catch {
-      toast('背景已生效，但图片太大没能记住');
+      // IndexedDB 不可用（隐私模式）：本次仍然生效，只是下次打开找不回来
+      toast('背景已生效，但这个浏览器不让保存图片');
+    }
+  }
+
+  /** 启动时把当前背景图从 IndexedDB 取回内存（异步，取到后会重画一次）。 */
+  async function loadStoredBackground() {
+    if (typeof settings.bgImageKey !== 'string') return;
+    try {
+      const dataUrl = await ImageStore.get(settings.bgImageKey);
+      if (typeof dataUrl === 'string') {
+        bgImage = dataUrl;
+        applyBackground();
+      }
+    } catch {
+      // 读不到就退回纯色，不打断阅读
     }
   }
 
@@ -271,7 +449,6 @@
       : 'var(--dsw-font-family)');
     document.body.dataset.codeWrap = settings.wrapCode ? 'on' : 'off';
     document.body.dataset.sidebar = settings.sidebar ? 'open' : 'closed';
-    $('sw-sidebar').setAttribute('aria-pressed', String(settings.sidebar));
   }
 
   // ─────────────────────────── 5. markdown 渲染管线 ───────────────────────────
@@ -461,8 +638,8 @@
         a.rel = 'noopener noreferrer';
       } else if (href.startsWith('#')) {
         a.addEventListener('click', (event) => {
-          const target = document.getElementById(href.slice(1));
-          if (target !== null) { event.preventDefault(); scrollToHeading(target) }
+          event.preventDefault();
+          if (!scrollToAnchor(href.slice(1), true)) toast('找不到这一节：' + href);
         });
       }
     });
@@ -481,9 +658,18 @@
       }
     });
 
-    // ⑦ 标题 id：目录与锚点都要用（dsh 没有标题锚点，这是为阅读器加的）
+    // ⑦ 标题锚点：用标题文字生成可读 id（支持中文），供目录、文内跳转和分享链接使用。
+    //    dsh 本身没有标题锚点，这是阅读器为"跳转到第 xxx 节"加的能力。
+    const used = new Set();
     $$('.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6', content)
-      .forEach((h, index) => { if (h.id === '') h.id = 'h-' + (index + 1) });
+      .forEach((h, index) => {
+        const base = slugify(h.textContent || '') || ('section-' + (index + 1));
+        let id = base;
+        let n = 2;
+        while (used.has(id)) { id = base + '-' + n; n += 1 }
+        used.add(id);
+        h.id = id;
+      });
   }
 
   /** 给一个 <pre> 套上 dsh 的代码块外壳，并做语法高亮。 */
@@ -558,33 +744,110 @@
 
   // ─────────────────────────── 6. 目录 / 进度 / 位置记忆 / 搜索 ───────────────────────────
 
-  let tocRows = [];
+  /** 目录树节点：{ id, head, level, children, parent }。 */
+  let tocTree = [];
+  /** 目录里当前可见的行（顺序 = 文档顺序），用于高亮与滚动跟随。 */
+  let tocFlat = [];
+  /** 全部标题（含被折叠隐藏的），用于判断"读到哪一节"。 */
+  let tocAll = [];
+  /** 当前高亮的那一节。 */
+  let activeTocId = '';
+  /** 每篇文档的折叠状态：docKey → Set(被折叠的标题 id)。只在内存里，不写盘。 */
+  const tocCollapsed = new Map();
 
-  /** 从正文标题生成目录。 */
+  /** 取当前文档的折叠集合；第一次见到这篇文档时，默认只展开到二级。 */
+  function tocCollapsedSet() {
+    const key = currentDoc === null ? 'none' : currentDoc.key;
+    let set = tocCollapsed.get(key);
+    if (set === undefined) {
+      set = new Set();
+      for (const node of tocAll) {
+        // 折叠"还有下一级的节点"：效果是默认只展开到二级（h3 及以下收起来）。
+        // 注意折叠某个 id 隐藏的是它的子节点，所以这里要折叠的是父节点而不是孙节点。
+        if (node.children.length > 0 && node.level >= 2) set.add(node.id);
+      }
+      tocCollapsed.set(key, set);
+    }
+    return set;
+  }
+
+  /**
+   * 从正文标题生成目录：按标题层级折成一棵树。
+   * 用"层级栈"而不是固定深度：文档可能从 h2 开头，中间也可能跳级。
+   */
   function buildToc() {
-    const toc = $('toc');
-    toc.textContent = '';
-    tocRows = [];
     const heads = $$('.markdown h1, .markdown h2, .markdown h3, .markdown h4', content);
-    if (heads.length === 0) {
+    tocTree = [];
+    tocAll = [];
+    const stack = [];
+    for (const head of heads) {
+      const level = Number(head.tagName.charAt(1));
+      const node = { id: head.id, head, level, children: [], parent: null };
+      while (stack.length > 0 && stack[stack.length - 1].level >= level) stack.pop();
+      const parent = stack.length === 0 ? null : stack[stack.length - 1];
+      node.parent = parent;
+      if (parent === null) tocTree.push(node);
+      else parent.children.push(node);
+      stack.push(node);
+      tocAll.push(node);
+    }
+    renderToc();
+  }
+
+  /** 重画目录（折叠状态变了、或当前节变了都会调用）。 */
+  function renderToc() {
+    const box = $('toc');
+    box.textContent = '';
+    tocFlat = [];
+    if (tocTree.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'sidebar-empty';
       empty.textContent = '这篇文档没有标题';
-      toc.appendChild(empty);
+      box.appendChild(empty);
       return;
     }
-    for (const head of heads) {
+    renderTocLevel(tocTree, box, 0, tocCollapsedSet());
+  }
+
+  /** 递归渲染一层目录：三角管折叠，标题文字管跳转。 */
+  function renderTocLevel(nodes, box, depth, collapsed) {
+    for (const node of nodes) {
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'row toc-row level-' + head.tagName.charAt(1);
-      row.dataset.target = head.id;
+      row.className = 'row toc-row level-' + node.level + (node.id === activeTocId ? ' active' : '');
+      row.dataset.target = node.id;
+      row.style.paddingLeft = (tuningPx('--row-pad-x', 8) + depth * tuningPx('--toc-indent', 14)) + 'px';
+
+      const twisty = document.createElement('span');
+      twisty.className = 'twisty';
+      if (node.children.length === 0) {
+        twisty.classList.add('spacer');
+        twisty.textContent = '';
+      } else {
+        const isCollapsed = collapsed.has(node.id);
+        twisty.textContent = isCollapsed ? '▸' : '▾';
+        twisty.title = isCollapsed ? '展开' : '折叠';
+        twisty.addEventListener('click', (event) => {
+          event.stopPropagation();   // 点三角只折叠，不跳转
+          if (collapsed.has(node.id)) collapsed.delete(node.id);
+          else collapsed.add(node.id);
+          renderToc();
+        });
+      }
+      row.appendChild(twisty);
+
       const name = document.createElement('span');
       name.className = 'name';
-      name.textContent = head.textContent;
+      name.textContent = node.head.textContent;
+      name.title = node.head.textContent;
       row.appendChild(name);
-      row.addEventListener('click', () => scrollToHeading(head));
-      toc.appendChild(row);
-      tocRows.push({ row, head });
+      row.addEventListener('click', () => scrollToHeading(node.head));
+      box.appendChild(row);
+      tocFlat.push({ node, row });
+
+      if (node.children.length > 0 && !collapsed.has(node.id)) {
+        renderTocLevel(node.children, box, depth + 1, collapsed);
+      }
     }
   }
 
@@ -595,15 +858,34 @@
     else stage.scrollTop = top;
   }
 
-  /** 让目录里当前所在的一节高亮。 */
+  /**
+   * 更新"当前读到哪一节"：高亮它，并自动展开它所在的分支（像文件树展开到当前文件）。
+   */
   function updateActiveHeading() {
-    if (tocRows.length === 0) return;
-    let active = tocRows[0];
-    for (const entry of tocRows) {
-      if (entry.head.getBoundingClientRect().top <= 110) active = entry;
+    if (tocAll.length === 0) return;
+    let active = tocAll[0];
+    for (const node of tocAll) {
+      if (node.head.getBoundingClientRect().top <= 110) active = node;
       else break;
     }
-    for (const entry of tocRows) entry.row.classList.toggle('active', entry === active);
+
+    // 自动展开祖先：折叠着的话先展开，再重画一次
+    const collapsed = tocCollapsedSet();
+    let changed = false;
+    for (let parent = active.parent; parent !== null; parent = parent.parent) {
+      if (collapsed.has(parent.id)) { collapsed.delete(parent.id); changed = true; }
+    }
+    if (changed) renderToc();
+
+    if (active.id !== activeTocId) {
+      activeTocId = active.id;
+      for (const entry of tocFlat) entry.row.classList.toggle('active', entry.node.id === activeTocId);
+      // 让当前这一行在侧栏里露出来（side 栏自己滚，不影响正文）
+      const row = tocFlat.find((entry) => entry.node.id === activeTocId);
+      if (row !== undefined && typeof row.row.scrollIntoView === 'function') {
+        row.row.scrollIntoView({ block: 'nearest' });
+      }
+    }
   }
 
   /** 位置记忆的存储键：每篇文档各自记住读到哪。 */
@@ -782,26 +1064,146 @@
     return cjk + words;
   }
 
-  /** 打开一份 markdown 文本：渲染 + 目录 + 位置恢复 + 标题栏。 */
-  function openText(text, meta) {
-    currentDoc = meta;
-    renderMarkdown(text);
-    document.body.dataset.reading = 'true';
-    $('doc-title').textContent = meta.name;
-    const bits = [];
-    if (meta.path !== undefined) bits.push(meta.path);
-    if (meta.size > 0) bits.push(formatSize(meta.size));
-    bits.push(countWords(text) + ' 字');
-    $('doc-meta').textContent = bits.join(' · ');
-    $('foot-left').textContent = meta.name;
-    $('foot-right').textContent = countWords(text) + ' 字 · 按 / 搜索 · T 换深浅色';
-    buildToc();
-    stage.scrollTop = 0;
-    onScroll();
-    restorePosition();
-    markActiveFile(meta.path);
-    document.title = meta.name + ' · Markdown 阅读器';
+  // ── 多文档：打开的文档（侧栏里像 dsh 的会话列表） ──
+  const docs = [];
+  let activeDocId = null;
+  let docSeq = 0;
+
+  /** 当前激活的文档对象。 */
+  function activeDoc() {
+    return docs.find((doc) => doc.id === activeDocId) || null;
   }
+
+  /**
+   * 打开一份文档（已在列表里就切过去，不会开两份）。
+   * @param {string} text markdown 原文
+   * @param {{ key: string, name: string, size?: number, path?: string, source?: string }} meta 文档元信息
+   */
+  function openDoc(text, meta) {
+    const existing = docs.find((doc) => doc.key === meta.key);
+    if (existing !== undefined) {
+      // 同一份文件可能被重新打开（内容变过），刷新正文再切过去
+      existing.text = text;
+      existing.name = meta.name;
+      existing.size = meta.size || 0;
+      existing.path = meta.path;
+      activateDoc(existing.id);
+      return;
+    }
+    docSeq += 1;
+    const doc = Object.assign({ id: 'doc-' + docSeq, text, size: 0, source: 'file' }, meta);
+    docs.push(doc);
+    activateDoc(doc.id);
+  }
+
+  /** 切到某份文档：先记住当前这篇读到哪，再渲染目标那篇。 */
+  function activateDoc(id) {
+    const next = docs.find((doc) => doc.id === id);
+    if (next === undefined) return;
+    const previous = activeDoc();
+    if (previous !== null && previous.id !== next.id) previous.scroll = stage.scrollTop;
+
+    activeDocId = next.id;
+    currentDoc = next;
+    renderMarkdown(next.text);
+    document.body.dataset.reading = 'true';
+
+    $('doc-title').textContent = next.name;
+    const bits = [];
+    if (next.path !== undefined) bits.push(next.path);
+    if (next.size > 0) bits.push(formatSize(next.size));
+    bits.push(countWords(next.text) + ' 字');
+    $('doc-meta').textContent = bits.join(' · ');
+    $('foot-left').textContent = next.name;
+    $('foot-right').textContent = docs.length > 1
+      ? (docs.length + ' 个文档 · Ctrl+Tab 切换')
+      : '按 / 搜索 · T 换深浅色 · \\ 收起侧栏';
+    document.title = next.name + ' · Markdown 阅读器';
+
+    buildToc();
+    stage.scrollTop = typeof next.scroll === 'number' ? next.scroll : 0;
+    onScroll();
+    if (typeof next.scroll !== 'number') restorePosition();
+    renderDocList();
+    markActiveFile(next.path);
+    closeSearch();
+    void resolveLocalImages();
+  }
+
+  /** 关掉一份文档；关的是当前这篇就顺位切到邻居。 */
+  function closeDoc(id) {
+    const index = docs.findIndex((doc) => doc.id === id);
+    if (index === -1) return;
+    const wasActive = docs[index].id === activeDocId;
+    docs.splice(index, 1);
+    if (!wasActive) { renderDocList(); return }
+    const neighbor = docs[index] || docs[index - 1] || null;
+    if (neighbor === null) { showEmptyState(); return }
+    activateDoc(neighbor.id);
+  }
+
+  /** Ctrl+Tab / Ctrl+Shift+Tab 在打开的文档之间循环。 */
+  function cycleDoc(delta) {
+    if (docs.length < 2) return;
+    const index = docs.findIndex((doc) => doc.id === activeDocId);
+    const next = (index + delta + docs.length) % docs.length;
+    activateDoc(docs[next].id);
+  }
+
+  /** 一份文档都没有时的界面（空状态 + 清掉标题栏）。 */
+  function showEmptyState() {
+    activeDocId = null;
+    currentDoc = null;
+    content.textContent = '';
+    document.body.dataset.reading = 'false';
+    $('doc-title').textContent = '还没有打开文档';
+    $('doc-meta').textContent = '拖入 .md 文件，或按 Ctrl/Cmd+O 选择';
+    $('foot-left').textContent = '';
+    $('foot-right').textContent = '';
+    $('progress-bar').style.width = '0%';
+    document.title = 'Markdown 阅读器';
+    buildToc();
+    renderDocList();
+    markActiveFile(undefined);
+  }
+
+  /** 渲染侧栏里的“打开的文档”列表（当前项高亮，右侧 × 关闭）。 */
+  function renderDocList() {
+    const list = $('doc-list');
+    list.textContent = '';
+    for (const doc of docs) {
+      const row = document.createElement('div');
+      row.className = 'row doc-row' + (doc.id === activeDocId ? ' active' : '');
+
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'doc-open';
+      open.title = doc.path !== undefined ? doc.path : doc.name;
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = doc.name;
+      open.appendChild(name);
+      open.addEventListener('click', () => activateDoc(doc.id));
+      row.appendChild(open);
+
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'doc-close';
+      close.textContent = '×';
+      close.title = '关闭（Ctrl+W）';
+      close.setAttribute('aria-label', '关闭 ' + doc.name);
+      close.addEventListener('click', (event) => { event.stopPropagation(); closeDoc(doc.id) });
+      row.appendChild(close);
+      // 鼠标中键关闭，和浏览器标签一致
+      row.addEventListener('auxclick', (event) => {
+        if (event.button === 1) { event.preventDefault(); closeDoc(doc.id) }
+      });
+      list.appendChild(row);
+    }
+    $('docs-empty').hidden = docs.length > 0;
+    $('open-docs-label').hidden = docs.length === 0;
+  }
+
 
   /** 打开本地文件（拖放或选择器）。 */
   async function openLocalFile(file) {
@@ -811,63 +1213,368 @@
       return;
     }
     const text = await file.text();
-    openText(text, { key: 'file:' + file.name + ':' + file.size, name: file.name, size: file.size });
+    openDoc(text, { key: 'file:' + file.name + ':' + file.size, name: file.name, size: file.size, source: 'file' });
   }
 
   /** 服务模式下按路径打开文档。 */
+  /**
+   * 按路径打开文档。两种来源共用这一条路径：
+   *   服务模式 → HTTP 接口；文件夹模式 → 浏览器给的目录句柄。
+   * @param {string} path 相对根目录的路径
+   * @param {boolean} [updateHash] 是否把当前文档写进地址栏
+   */
   async function openServerPath(path, updateHash) {
     try {
-      const res = await fetch('api/file?path=' + encodeURIComponent(path));
-      const data = await res.json();
-      if (!res.ok || data.error !== undefined) { toast(data.error || '打不开这个文件'); return }
-      if (updateHash !== false) location.hash = encodeURIComponent(path);
-      openText(data.text, { key: 'path:' + path, name: data.name, size: data.size, path });
+      let text;
+      let name;
+      let size = 0;
+      if (serverRoot !== null) {
+        const res = await fetch('api/file?path=' + encodeURIComponent(path));
+        const data = await res.json();
+        if (!res.ok || data.error !== undefined) { toast(data.error || '打不开这个文件'); return }
+        text = data.text;
+        name = data.name;
+        size = data.size;
+      } else if (folderFiles.has(path)) {
+        const file = await folderFiles.get(path).getFile();
+        text = await file.text();
+        name = file.name;
+        size = file.size;
+      } else {
+        toast('这个文件已经不在了（可能被移动或删除）');
+        return;
+      }
+      if (updateHash !== false) setLocation(path);
+      openDoc(text, { key: 'path:' + path, name, size, path, source: serverRoot === null ? 'folder' : 'server' });
     } catch {
       toast('读取失败');
     }
   }
 
-  /** 渲染左侧文件列表（目录名作为浅色前缀显示在文件名前面）。 */
-  function buildFileList(files) {
-    const list = $('file-list');
-    list.textContent = '';
-    if (files.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'sidebar-empty';
-      empty.textContent = '这个目录里没有 markdown 文件';
-      list.appendChild(empty);
-      return;
+  // ── 侧栏文件树（可折叠，像 Unity 的层级面板） ──
+  /** 树的根节点：{ name, full, dirs: Map, files: [] }。 */
+  let treeRoot = null;
+  /** 已展开的目录（存完整路径）。只活在本次会话里，不写进设置——它属于"正在看的目录"，不属于偏好。 */
+  const expandedDirs = new Set();
+  /** 当前文档在树里的路径，用于高亮。 */
+  let activePath;
+
+  /** 把"相对路径列表"折成一棵目录树。 */
+  function buildTree(paths) {
+    const root = { name: '', full: '', dirs: new Map(), files: [] };
+    for (const path of paths) {
+      const parts = path.split('/');
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        const name = parts[i];
+        if (!node.dirs.has(name)) {
+          node.dirs.set(name, {
+            name,
+            full: node.full === '' ? name : node.full + '/' + name,
+            dirs: new Map(),
+            files: [],
+          });
+        }
+        node = node.dirs.get(name);
+      }
+      node.files.push({ name: parts[parts.length - 1], path });
     }
-    for (const path of files) {
-      const slash = path.lastIndexOf('/');
-      const dir = slash === -1 ? '' : path.slice(0, slash + 1);
-      const name = slash === -1 ? path : path.slice(slash + 1);
+    return root;
+  }
+
+  /** 换一棵树（服务模式读目录、或浏览器原生文件夹模式）。 */
+  function setTree(paths) {
+    treeRoot = buildTree(paths);
+    const empty = treeRoot.dirs.size === 0 && treeRoot.files.length === 0;
+    $('files-label').hidden = empty;
+    $('docs-empty').hidden = empty || docs.length > 0;
+    renderFileTree();
+  }
+
+  /** 重画整棵树（目录展开状态变了就整体重画，树很小，没必要增量）。 */
+  function renderFileTree() {
+    const box = $('file-tree');
+    box.textContent = '';
+    if (treeRoot === null) return;
+    renderTreeLevel(treeRoot, box, 0);
+  }
+
+  /** 递归渲染一层：先目录（带展开三角），再文件。 */
+  function renderTreeLevel(node, box, depth) {
+    for (const dir of node.dirs.values()) {
+      const open = expandedDirs.has(dir.full);
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'row file-row';
-      row.dataset.path = path;
-      const nameEl = document.createElement('span');
-      nameEl.className = 'name';
-      nameEl.textContent = name;
-      if (dir !== '') {
-        const dirEl = document.createElement('span');
-        dirEl.className = 'dir';
-        dirEl.textContent = dir;
-        row.appendChild(dirEl);
-      }
-      row.appendChild(nameEl);
-      row.addEventListener('click', () => { void openServerPath(path) });
-      list.appendChild(row);
+      row.className = 'row tree-row dir' + (open ? ' open' : '');
+      row.style.paddingLeft = (tuningPx('--row-pad-x', 8) + depth * tuningPx('--tree-indent', 14)) + 'px';
+      const twisty = document.createElement('span');
+      twisty.className = 'twisty';
+      twisty.textContent = open ? '▾' : '▸';
+      const label = document.createElement('span');
+      label.className = 'name';
+      label.textContent = dir.name;
+      row.append(twisty, label);
+      row.title = dir.full;
+      row.addEventListener('click', () => {
+        if (open) expandedDirs.delete(dir.full);
+        else expandedDirs.add(dir.full);
+        renderFileTree();
+      });
+      box.appendChild(row);
+      if (open) renderTreeLevel(dir, box, depth + 1);
+    }
+    for (const file of node.files) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'row tree-row file' + (file.path === activePath ? ' active' : '');
+      row.dataset.path = file.path;
+      row.style.paddingLeft = (tuningPx('--row-pad-x', 8) + depth * tuningPx('--tree-indent', 14) + tuningPx('--twisty-w', 16)) + 'px';
+      const label = document.createElement('span');
+      label.className = 'name';
+      label.textContent = file.name;
+      row.appendChild(label);
+      row.title = file.path;
+      row.addEventListener('click', () => { void openServerPath(file.path) });
+      box.appendChild(row);
     }
   }
 
-  /** 让当前文档在文件列表里高亮。 */
+  /** 高亮当前文档，并自动展开它所在的目录链（Unity 里选中对象也是这个行为）。 */
   function markActiveFile(path) {
-    $$('#file-list .row').forEach((row) => {
+    activePath = path;
+    if (path !== undefined && treeRoot !== null) {
+      const parts = path.split('/');
+      let changed = false;
+      for (let i = 1; i < parts.length; i += 1) {
+        const dir = parts.slice(0, i).join('/');
+        if (!expandedDirs.has(dir)) { expandedDirs.add(dir); changed = true; }
+      }
+      if (changed) renderFileTree();
+    }
+    $$('#file-tree .tree-row.file').forEach((row) => {
       row.classList.toggle('active', path !== undefined && row.dataset.path === path);
     });
   }
 
+
+  // ── 文内锚点与深链接 ──
+
+  /**
+   * 标题 → 锚点 id：保留中英文与数字，空白折成连字符，去掉标点。
+   * 「三、背景与玻璃」→「三背景与玻璃」，「Why is it so?」→「why-is-it-so」。
+   * @param {string} text 标题文字
+   * @returns {string} 锚点 id
+   */
+  function slugify(text) {
+    const cleaned = text
+      .trim()
+      .toLowerCase()
+      .replace(/[\s\u3000]+/g, '-')
+      .replace(/[^\p{Letter}\p{Number}-]+/gu, '')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return cleaned;
+  }
+
+  /**
+   * 找一个锚点对应的标题。先精确匹配，再退一步做"宽松匹配"：
+   * 这样从别处（GitHub、编辑器预览）复制来的链接也能跳到。
+   * @param {string} anchor 锚点（不带 #）
+   * @returns {HTMLElement | null} 命中的标题元素
+   */
+  function findHeading(anchor) {
+    const wanted = decodeURIComponent(anchor).replace(/^#/, '');
+    if (wanted === '') return null;
+    const exact = document.getElementById(wanted);
+    if (exact !== null) return exact;
+    const loose = slugify(wanted).replace(/-/g, '');
+    if (loose === '') return null;
+    const heads = $$('.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6', content);
+    const hits = heads.filter((h) => {
+      const id = h.id.replace(/-/g, '');
+      const text = slugify(h.textContent || '').replace(/-/g, '');
+      return id === loose || text === loose || id.endsWith(loose) || text.endsWith(loose);
+    });
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  /** 目标标题闪一下：视觉上告诉眼睛"就是这里"。 */
+  function flashTarget(node) {
+    node.classList.remove('flashed');
+    // 强制重排，让动画能重复触发
+    void node.offsetWidth;
+    node.classList.add('flashed');
+    window.setTimeout(() => node.classList.remove('flashed'), 1600);
+  }
+
+  /**
+   * 跳到某个锚点。
+   * @param {string} anchor 锚点（不带 #）
+   * @param {boolean} [updateHash] 是否同时改写地址栏（默认改，方便分享）
+   * @returns {boolean} 是否找到并跳转
+   */
+  function scrollToAnchor(anchor, updateHash) {
+    const target = findHeading(anchor);
+    if (target === null) return false;
+    const from = stage.scrollTop;
+    scrollToHeading(target);
+    flashTarget(target);
+    showJumpChip(target.textContent || '', from);
+    if (updateHash !== false) {
+      const slug = target.id;
+      if (location.hash.slice(1) !== slug) {
+        hashSelfUpdate = true;   // 这个 hash 是我们自己写的，别再触发一次滚动
+        location.hash = slug;
+      }
+    }
+    return true;
+  }
+
+  /** 跳转后的小提示条：显示跳到哪一节，并提供"回到原处"。 */
+  let jumpTimer = 0;
+  function showJumpChip(title, returnTop) {
+    const chip = $('jump-chip');
+    $('jump-title').textContent = title;
+    chip.hidden = false;
+    chip.classList.add('show');
+    $('jump-back').onclick = () => {
+      if (typeof stage.scrollTo === 'function') stage.scrollTo({ top: returnTop, behavior: 'smooth' });
+      else stage.scrollTop = returnTop;
+      hideJumpChip();
+    };
+    clearTimeout(jumpTimer);
+    jumpTimer = window.setTimeout(hideJumpChip, 6000);
+  }
+
+  function hideJumpChip() {
+    const chip = $('jump-chip');
+    chip.classList.remove('show');
+    window.setTimeout(() => { chip.hidden = true; }, 200);
+  }
+
+  /** 把当前文档写进地址栏（服务模式）：?file=路径#锚点。 */
+  function setLocation(path, anchor) {
+    if (serverRoot === null) return;
+    const query = path === undefined ? '' : '?file=' + encodeURIComponent(path);
+    const hash = anchor === undefined || anchor === '' ? '' : '#' + anchor;
+    try {
+      history.replaceState(null, '', location.pathname + query + hash);
+    } catch {
+      // file:// 下个别浏览器不允许改地址：忽略，不影响阅读
+    }
+  }
+
+  /** 从地址栏读出要打开什么：?file=路径（旧格式 #路径 也认）与 #锚点。 */
+  function readLocation() {
+    const params = new URLSearchParams(location.search);
+    const fromQuery = params.get('file');
+    const rawHash = decodeURIComponent(location.hash.slice(1));
+    let path = fromQuery === null ? null : fromQuery;
+    let anchor = rawHash === '' ? null : rawHash;
+    // 旧链接形如 #docs/a.md：把文件路径从 hash 里认出来，锚点留空
+    if (path === null && anchor !== null && /\.(md|markdown|mdown|mkd|txt)$/i.test(anchor) && findHeading(anchor) === null) {
+      path = anchor;
+      anchor = null;
+    }
+    return { path, anchor };
+  }
+
+  /** 自己改写地址栏时的防重入标记（否则会重复滚动、并把"返回原处"的起点记错）。 */
+  let hashSelfUpdate = false;
+
+  /** hash 变化（点锚点、前进后退）时：该跳就跳，该换文档就换。 */
+  function onHashChange() {
+    if (hashSelfUpdate) { hashSelfUpdate = false; return }
+    const raw = decodeURIComponent(location.hash.slice(1));
+    if (raw === '') return;
+    if (findHeading(raw) !== null) { scrollToAnchor(raw, false); return }
+    if (serverRoot !== null && /\.(md|markdown|mdown|mkd|txt)$/i.test(raw)) { void openServerPath(raw, false) }
+  }
+  // ── 浏览器原生文件夹模式（File System Access API） ──
+  /*
+     为什么需要它：服务模式要 Node，而单文件 HTML 版是发给"没装任何东西"的朋友的。
+     Chromium 系浏览器允许网页读取用户主动选择的文件夹，于是没有服务器也能有文件树；
+     Firefox / Safari 没有这个能力，按钮会给出提示，其余功能照常。
+  */
+  /** 用户在文件夹模式里选中的目录句柄。 */
+  let folderHandle = null;
+  /** 路径 → 文件句柄（文件夹模式下用它读文件）。 */
+  const folderFiles = new Map();
+  /** 遍历时跳过的目录名。 */
+  const SKIP_DIR_NAMES = new Set(['node_modules', '.git', 'dist', 'build', 'out', 'vendor', 'venv', '.venv', '__pycache__']);
+  /** 文件夹模式下生成的图片 blob URL，切换文档时要回收。 */
+  let localImageUrls = [];
+
+  /** 让用户选一个文件夹（仅 Chromium 系支持）。 */
+  async function openDirectory() {
+    if (serverRoot !== null) { toast('服务模式已经指定了根目录'); return }
+    if (typeof window.showDirectoryPicker !== 'function') {
+      toast('这个浏览器不能读文件夹。把文件拖进来，或用服务模式打开');
+      return;
+    }
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker({ mode: 'read' });
+    } catch {
+      return;   // 用户取消（AbortError），不需要报错
+    }
+    folderHandle = handle;
+    folderFiles.clear();
+    const paths = [];
+    await walkDirectory(handle, '', paths, 0);
+    paths.sort((a, b) => a.localeCompare(b, 'zh'));
+    $('root-name').textContent = handle.name;
+    $('root-line').hidden = false;
+    setTree(paths);
+    setSidebar(true);
+    applyEmptyState();
+    toast(paths.length === 0 ? '这个文件夹里没有 markdown 文件' : ('找到 ' + paths.length + ' 个 markdown 文件'));
+  }
+
+  /** 递归遍历目录，收集 markdown 文件的相对路径与句柄。 */
+  async function walkDirectory(dirHandle, prefix, out, depth) {
+    if (depth > 8) return;
+    for await (const entry of dirHandle.values()) {
+      if (entry.name.startsWith('.') || SKIP_DIR_NAMES.has(entry.name)) continue;
+      const path = prefix === '' ? entry.name : prefix + '/' + entry.name;
+      if (entry.kind === 'directory') {
+        await walkDirectory(entry, path, out, depth + 1);
+      } else if (/\.(md|markdown|mdown|mkd|txt)$/i.test(entry.name)) {
+        folderFiles.set(path, entry);
+        out.push(path);
+      }
+    }
+  }
+
+  /**
+   * 文件夹模式下，把正文里的相对图片换成 blob URL（本地文件没有服务器可读）。
+   * 渲染是同步的，所以这里在渲染之后异步补一遍。
+   */
+  async function resolveLocalImages() {
+    for (const url of localImageUrls) URL.revokeObjectURL(url);
+    localImageUrls = [];
+    if (folderFiles.size === 0 || currentDoc === null || currentDoc.path === undefined) return;
+    const base = currentDoc.path.split('/').slice(0, -1);
+    for (const img of $$('.markdown img', content)) {
+      const raw = img.getAttribute('src');
+      if (raw === null || /^(https?:|data:|blob:)/i.test(raw)) continue;
+      const parts = base.slice();
+      for (const seg of raw.split('/')) {
+        if (seg === '' || seg === '.') continue;
+        if (seg === '..') parts.pop();
+        else parts.push(seg);
+      }
+      const handle = folderFiles.get(parts.join('/'));
+      if (handle === undefined) continue;
+      try {
+        const url = URL.createObjectURL(await handle.getFile());
+        localImageUrls.push(url);
+        img.src = url;
+      } catch {
+        // 读不到就保持原样（显示为破图）
+      }
+    }
+  }
   /** 图片灯箱：点开大图 / 关闭。 */
   function openLightbox(src) {
     $('lightbox-img').src = src;
@@ -883,17 +1590,46 @@
 
   // ─────────────────────────── 8. 控件、快捷键、启动 ───────────────────────────
 
-  /** 绑定一个滑杆：初值来自设置，拖动时写回设置并立刻生效。 */
-  function bindRange(id, outId, key, apply, format) {
-    const input = $(id);
-    const out = $(outId);
-    input.value = String(settings[key]);
-    out.textContent = format(settings[key]);
-    input.addEventListener('input', () => {
-      settings[key] = Number(input.value);
-      out.textContent = format(settings[key]);
-      apply();
+  /*
+     数值项的统一定义：一个滑杆（拖得快）+ 一个数字框（填得准）。
+     两者读写同一个设置键，所以"拖"和"填"永远一致。
+     toUi/fromUi 负责单位换算：内部存小数（0.3），界面显示百分比（30）。
+  */
+  const FIELDS = [
+    { key: 'scale', range: 'r-scale', num: 'n-scale', min: 85, max: 140, toUi: (v) => Math.round(v * 100), fromUi: (v) => v / 100, apply: () => applyReading() },
+    { key: 'leading', range: 'r-leading', num: 'n-leading', min: 80, max: 150, toUi: (v) => Math.round(v * 100), fromUi: (v) => v / 100, apply: () => applyReading() },
+    { key: 'width', range: 'r-width', num: 'n-width', min: 560, max: 1000, toUi: (v) => Math.round(v), fromUi: (v) => v, apply: () => applyReading() },
+    { key: 'bgBlur', range: 'r-blur', num: 'n-blur', min: 0, max: 48, toUi: (v) => Math.round(v), fromUi: (v) => v, apply: () => applyBackground() },
+    { key: 'bgDim', range: 'r-dim', num: 'n-dim', min: 0, max: 70, toUi: (v) => Math.round(v * 100), fromUi: (v) => v / 100, apply: () => applyBackground() },
+    { key: 'glassAlpha', range: 'r-glass', num: 'n-glass', min: 20, max: 95, toUi: (v) => Math.round(v * 100), fromUi: (v) => v / 100, apply: () => applyBackground() },
+  ];
+
+  /** 把一个字段的界面控件（滑杆 + 数字框）与设置同步。 */
+  function bindField(field) {
+    const range = $(field.range);
+    const num = $(field.num);
+
+    range.addEventListener('input', () => {
+      settings[field.key] = Number(range.value);
+      num.value = String(field.toUi(settings[field.key]));
+      field.apply();
       saveSettings();
+    });
+
+    const commit = () => {
+      const raw = Number(num.value);
+      if (!Number.isFinite(raw)) { num.value = String(field.toUi(settings[field.key])); return }
+      const clamped = clamp(raw, field.min, field.max);
+      num.value = String(Math.round(clamped));
+      settings[field.key] = field.fromUi(clamped);
+      range.value = String(settings[field.key]);
+      field.apply();
+      saveSettings();
+    };
+    num.addEventListener('change', commit);
+    num.addEventListener('blur', commit);
+    num.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); commit(); num.blur() }
     });
   }
 
@@ -911,22 +1647,15 @@
 
   /** 把设置回填到所有控件（重置后要用）。 */
   function syncControls() {
-    const ranges = [
-      ['r-scale', 'v-scale', 'scale', (v) => Math.round(v * 100) + '%'],
-      ['r-leading', 'v-leading', 'leading', (v) => v.toFixed(2) + 'x'],
-      ['r-width', 'v-width', 'width', (v) => Math.round(v) + 'px'],
-      ['r-blur', 'v-blur', 'bgBlur', (v) => Math.round(v) + 'px'],
-      ['r-dim', 'v-dim', 'bgDim', (v) => Math.round(v * 100) + '%'],
-      ['r-glass', 'v-glass', 'glassAlpha', (v) => Math.round(v * 100) + '%'],
-    ];
-    for (const entry of ranges) {
-      $(entry[0]).value = String(settings[entry[2]]);
-      $(entry[1]).textContent = entry[3](settings[entry[2]]);
+    for (const field of FIELDS) {
+      $(field.range).value = String(settings[field.key]);
+      $(field.num).value = String(field.toUi(settings[field.key]));
     }
     $('sw-serif').setAttribute('aria-pressed', String(settings.serif));
     $('sw-wrap').setAttribute('aria-pressed', String(settings.wrapCode));
-    $('sw-sidebar').setAttribute('aria-pressed', String(settings.sidebar));
+    renderRecents();
   }
+
 
   function setTheme(theme) {
     settings.theme = theme;
@@ -953,19 +1682,106 @@
     applyReading();
   }
 
+  /** 设置面板的三段（外观 / 排版 / 背景）。 */
+  function setSettingsTab(tab) {
+    const name = tab === 'bg' ? 'bg' : 'type';
+    $('pop-type').hidden = name !== 'type';
+    $('pop-bg').hidden = name !== 'bg';
+    $$('[data-ptab]').forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.ptab === name)));
+  }
+
+  /**
+   * 空状态里的卡片按当前环境显隐：
+   *   · 左侧已经有文档列表（服务模式，或已经选过文件夹）→ 显示"从左侧选择"，藏掉"打开文件夹";
+   *   · 浏览器不支持读取文件夹（Firefox / Safari）→ 也藏掉"打开文件夹"。
+   */
+  function applyEmptyState() {
+    const hasListing = serverRoot !== null || folderFiles.size > 0;
+    $('card-browse').hidden = !hasListing;
+    $('card-folder').hidden = hasListing || typeof window.showDirectoryPicker !== 'function';
+  }
+
+  /** 画"最近使用"的背景（最多 5 个，含自定义图片；空格子也画出来，网格才稳）。 */
+  function renderRecents() {
+    const box = $('recents');
+    box.textContent = '';
+    const items = settings.recents.slice(0, MAX_RECENTS);
+    for (const item of items) {
+      if (item.kind === 'preset' && PRESETS.every((preset) => preset.id !== item.id)) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'recent';
+      const current = (item.kind === 'preset' && settings.bgMode === 'preset' && settings.bgPreset === item.id)
+        || (item.kind === 'image' && settings.bgMode === 'image' && settings.bgImageKey === item.key);
+      if (current) btn.classList.add('active');
+      if (item.kind === 'preset') {
+        const preset = PRESETS.find((entry) => entry.id === item.id);
+        btn.style.backgroundImage = preset.css;
+        btn.title = preset.name;
+        btn.setAttribute('aria-label', preset.name);
+      } else {
+        btn.title = '自定义图片';
+        btn.setAttribute('aria-label', '自定义图片');
+        btn.classList.add('pending');
+        void ImageStore.get(item.key).then((dataUrl) => {
+          if (typeof dataUrl === 'string') {
+            btn.style.backgroundImage = 'url(' + JSON.stringify(dataUrl) + ')';
+            btn.classList.remove('pending');
+          }
+        }).catch(() => { btn.classList.add('missing') });
+      }
+      btn.addEventListener('click', () => { void applyRecent(item) });
+      box.appendChild(btn);
+    }
+    for (let i = items.length; i < MAX_RECENTS; i += 1) {
+      const slot = document.createElement('div');
+      slot.className = 'recent empty';
+      box.appendChild(slot);
+    }
+  }
+
+  /** 用"最近使用"里的某一项（预设或图片）当背景。 */
+  async function applyRecent(item) {
+    if (item.kind === 'preset') {
+      settings.bgMode = 'preset';
+      settings.bgPreset = item.id;
+      saveSettings();
+      applyBackground();
+      return;
+    }
+    try {
+      const dataUrl = await ImageStore.get(item.key);
+      if (typeof dataUrl !== 'string') { toast('这张背景图已经不在了'); return }
+      bgImage = dataUrl;
+      settings.bgMode = 'image';
+      settings.bgImageKey = item.key;
+      saveSettings();
+      applyBackground();
+      rememberBackground(item);
+    } catch {
+      toast('读不到这张背景图');
+    }
+  }
+  /**
+   * 打开设置面板，并把它摆在入口旁边：默认在按钮下方、左边缘对齐；
+   * 下方放不下就翻到按钮上方（入口在左下角，所以这条分支是常态）。
+   */
   function openPopover() {
     const pop = $('popover');
     pop.hidden = false;
     const rect = $('btn-settings').getBoundingClientRect();
     const width = pop.offsetWidth;
-    pop.style.top = Math.round(rect.bottom + 8) + 'px';
-    pop.style.left = Math.round(Math.max(12, Math.min(window.innerWidth - width - 12, rect.right - width))) + 'px';
+    const height = pop.offsetHeight;
+    const below = rect.bottom + 8;
+    const top = below + height > window.innerHeight - 8 ? Math.max(8, rect.top - height - 8) : below;
+    pop.style.top = Math.round(top) + 'px';
+    pop.style.left = Math.round(Math.max(12, Math.min(window.innerWidth - width - 12, rect.left))) + 'px';
   }
 
   function openSample() {
     const md = window.__SAMPLE_MD__;
     if (typeof md !== 'string') { toast('示例文档没找到（sample.js 缺失？）'); return }
-    openText(md, { key: 'sample', name: '示例文档.md', size: md.length });
+    openDoc(md, { key: 'sample', name: 'sample.md', size: md.length, source: 'sample' });
   }
 
   function resetSettings() {
@@ -973,10 +1789,13 @@
     bgImage = null;
     try {
       localStorage.removeItem(SETTINGS_KEY);
-      localStorage.removeItem(IMAGE_KEY);
+      for (const oldKey of LEGACY_SETTINGS_KEYS) localStorage.removeItem(oldKey);
+      localStorage.removeItem(LEGACY_IMAGE_KEY);
     } catch {
       // 清不掉也无所谓
     }
+    // 背景图存在 IndexedDB 里，也一并清掉
+    void ImageStore.keys().then((keys) => Promise.all(keys.map((key) => ImageStore.del(key)))).catch(() => {});
     saveSettings();
     applyTheme();
     applyReading();
@@ -986,21 +1805,17 @@
   }
 
   function bindControls() {
-    bindRange('r-scale', 'v-scale', 'scale', applyReading, (v) => Math.round(v * 100) + '%');
-    bindRange('r-leading', 'v-leading', 'leading', applyReading, (v) => v.toFixed(2) + 'x');
-    bindRange('r-width', 'v-width', 'width', applyReading, (v) => Math.round(v) + 'px');
-    bindRange('r-blur', 'v-blur', 'bgBlur', applyBackground, (v) => Math.round(v) + 'px');
-    bindRange('r-dim', 'v-dim', 'bgDim', applyBackground, (v) => Math.round(v * 100) + '%');
-    bindRange('r-glass', 'v-glass', 'glassAlpha', applyBackground, (v) => Math.round(v * 100) + '%');
-
     bindSwitch('sw-serif', 'serif', applyReading);
     bindSwitch('sw-wrap', 'wrapCode', applyReading);
-    bindSwitch('sw-sidebar', 'sidebar', applyReading);
 
     $$('[data-theme]').forEach((btn) => btn.addEventListener('click', () => setTheme(btn.dataset.theme)));
     $$('[data-theme-opt]').forEach((btn) => btn.addEventListener('click', () => setTheme(btn.dataset.themeOpt)));
 
+    // 侧栏：收起 / 展开 / 分段切换（收起按钮在侧栏自己头上，顶栏那个是"展开"入口）
+    $('btn-collapse').addEventListener('click', () => setSidebar(false));
     $('btn-sidebar').addEventListener('click', () => setSidebar(!settings.sidebar));
+    $('scrim').addEventListener('click', () => setSidebar(false));
+
     $('btn-search').addEventListener('click', openSearch);
     $('btn-settings').addEventListener('click', (event) => {
       event.stopPropagation();
@@ -1008,14 +1823,24 @@
       if (pop.hidden) openPopover(); else pop.hidden = true;
     });
     $('btn-print').addEventListener('click', () => window.print());
-    $('btn-open').addEventListener('click', () => $('file-input').click());
-    $('btn-open-2').addEventListener('click', () => $('file-input').click());
+    $('btn-open-file').addEventListener('click', () => $('file-input').click());
+    // 空状态里的三张卡
+    $('card-open').addEventListener('click', () => $('file-input').click());
+    $('card-folder').addEventListener('click', () => { void openDirectory(); });
+    $('card-browse').addEventListener('click', () => setSidebar(true));
     $('btn-sample').addEventListener('click', openSample);
     $('btn-reset').addEventListener('click', resetSettings);
+    $('btn-open-folder').addEventListener('click', () => { void openDirectory(); });
+
+    // 设置面板的三个分段
+    $$('[data-ptab]').forEach((btn) => btn.addEventListener('click', () => setSettingsTab(btn.dataset.ptab)));
+
+    // 数值项：滑杆 + 数字框
+    for (const field of FIELDS) bindField(field);
 
     $('file-input').addEventListener('change', (event) => {
-      const file = event.target.files && event.target.files[0];
-      if (file) void openLocalFile(file);
+      const files = event.target.files === null ? [] : Array.from(event.target.files);
+      for (const file of files) void openLocalFile(file);
       event.target.value = '';
     });
 
@@ -1063,6 +1888,22 @@
         if ($('popover').hidden === false) { $('popover').hidden = true; return }
         return;
       }
+      // 文档切换：Ctrl+Tab / Ctrl+W / Ctrl+1..9 都被浏览器占了（标签页切换、关标签），
+      // 所以这里用 Alt 组合键，它们在网页里是空闲的。
+      if (event.altKey && /^[1-9]$/.test(event.key)) {
+        const index = Number(event.key) - 1;
+        if (docs[index] !== undefined) { event.preventDefault(); activateDoc(docs[index].id) }
+        return;
+      }
+      if (event.altKey && (event.key === 'w' || event.key === 'W')) {
+        event.preventDefault();
+        if (activeDocId !== null) closeDoc(activeDocId);
+        return;
+      }
+      if (event.altKey && event.key === '[') { event.preventDefault(); cycleDoc(-1); return }
+      if (event.altKey && event.key === ']') { event.preventDefault(); cycleDoc(1); return }
+      if (mod && event.key === 'Tab') { event.preventDefault(); cycleDoc(event.shiftKey ? -1 : 1); return }
+
       if (typing) return;
       if (event.key === '/') { event.preventDefault(); openSearch(); return }
       if (event.key === '\\') { setSidebar(!settings.sidebar); return }
@@ -1101,27 +1942,43 @@
     bindControls();
     bindKeys();
     bindDnd();
+    renderDocList();
 
-    window.addEventListener('hashchange', () => {
-      const path = decodeURIComponent(location.hash.slice(1));
-      if (serverRoot !== null && path !== '') void openServerPath(path, false);
-    });
+    // 锚点跳转与浏览器前进后退都靠 hashchange
+    window.addEventListener('hashchange', onHashChange);
+
+    // 背景图存在 IndexedDB 里，取回来是异步的（取到后会自己重画）
+    await migrateLegacyImage();
+    await loadStoredBackground();
 
     const info = await detectServer();
     if (info !== null) {
+      // 服务模式：根目录由启动参数决定，文件列表走 HTTP 接口
       serverRoot = info.root;
-      $('root-name').textContent = '/ ' + info.name;
-      $('files-section').hidden = false;
-      $('files-divider').hidden = false;
+      $('root-name').textContent = info.name;
+      $('root-line').hidden = false;
+      $('btn-open-folder').hidden = true;   // 已经有根目录了，不再需要选文件夹
       try {
         const res = await fetch('api/tree');
         const data = await res.json();
-        buildFileList(Array.isArray(data.files) ? data.files : []);
+        setTree(Array.isArray(data.files) ? data.files : []);
       } catch {
         toast('读不到文件列表');
       }
-      const hash = decodeURIComponent(location.hash.slice(1));
-      if (hash !== '') await openServerPath(hash, false);
+    } else if (typeof window.showDirectoryPicker !== 'function') {
+      // 静态模式且浏览器不支持读文件夹：把"打开文件夹"按钮收起来，避免点了没反应
+      $('btn-open-folder').hidden = true;
+    }
+
+    applyEmptyState();
+
+    // 地址栏里可能带着要打开的文档与小节（可分享的深链接）
+    const initial = readLocation();
+    if (initial.path !== null && serverRoot !== null) {
+      await openServerPath(initial.path, false);
+      if (initial.anchor !== null) scrollToAnchor(initial.anchor, false);
+    } else if (initial.anchor !== null && docs.length > 0) {
+      scrollToAnchor(initial.anchor, false);
     }
   }
 

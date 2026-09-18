@@ -8,9 +8,10 @@
  *   3. 提供按路径读取文件内容的接口。
  *
  * 用法：
- *   node serve.mjs                 # 服务当前目录
- *   node serve.mjs ~/notes         # 服务指定目录
- *   PORT=5000 node serve.mjs .     # 换端口（默认 4321）
+ *   node serve.mjs                     # 服务当前目录
+ *   node serve.mjs ~/notes             # 服务指定目录
+ *   node serve.mjs ~/notes --port 5000 # 换端口（默认 4321；0 = 让系统随便挑）
+ *   node serve.mjs . --quiet           # 安静模式（给启动器用）
  *
  * 安全：只监听 127.0.0.1（外面访问不到）；所有路径都被限制在你指定的根目录内。
  */
@@ -21,9 +22,29 @@ import { fileURLToPath } from 'node:url'
 
 /** 阅读器自己的文件所在目录（= 本文件所在目录）。 */
 const APP_DIR = dirname(fileURLToPath(import.meta.url))
+
+/** 解析命令行：位置参数是文档根目录，其余是可选项。 */
+function parseArgs(argv) {
+  const out = { root: null, port: Number(process.env.PORT ?? 4321), quiet: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--port' || arg === '-p') { out.port = Number(argv[i + 1]); i += 1; continue }
+    if (arg === '--quiet' || arg === '-q') { out.quiet = true; continue }
+    if (arg === '--help' || arg === '-h') { out.help = true; continue }
+    if (arg.startsWith('-')) continue;
+    if (out.root === null) out.root = arg;
+  }
+  return out;
+}
+
+const OPTIONS = parseArgs(process.argv.slice(2));
+if (OPTIONS.help === true) {
+  console.log('用法：node serve.mjs [文档目录] [--port 4321] [--quiet]');
+  process.exit(0);
+}
 /** 允许浏览的根目录：命令行第一个参数，默认当前目录。 */
-const ROOT = resolve(process.argv[2] ?? process.cwd())
-const PORT = Number(process.env.PORT ?? 4321)
+const ROOT = resolve(OPTIONS.root ?? process.cwd())
+const PORT = OPTIONS.port
 /** 认作 markdown 的扩展名。 */
 const MARKDOWN_EXT = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt'])
 /** 目录树里跳过的目录（避免把 node_modules 也扫出来）。 */
@@ -160,9 +181,21 @@ const server = createServer(async (req, res) => {
   }
 });
 
+server.on('error', (error) => {
+  if (error !== null && error.code === 'EADDRINUSE') {
+    console.error('端口 ' + PORT + ' 已经被占用了。换个端口再试，例如：');
+    console.error('  node serve.mjs "' + ROOT + '" --port ' + (PORT + 1));
+    process.exit(1);
+  }
+  throw error;
+});
+
 server.listen(PORT, '127.0.0.1', () => {
-  console.log('md-reader（服务模式）');
-  console.log('  文档根目录：' + ROOT);
-  console.log('  打开：http://127.0.0.1:' + PORT + '/');
-  console.log('  Ctrl-C 结束');
+  const actual = server.address().port;
+  if (OPTIONS.quiet !== true) {
+    console.log('Markdown 阅读器（服务模式）');
+    console.log('  文档根目录：' + ROOT);
+    console.log('  打开：http://127.0.0.1:' + actual + '/');
+    console.log('  Ctrl-C 结束');
+  }
 });

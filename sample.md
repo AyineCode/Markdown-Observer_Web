@@ -2,6 +2,8 @@
 
 这是一篇用来检查渲染效果的自测文档。下面出现的每一种元素，样式都与 DeepSeek Harness 聊天里的正文一致——因为样式表就是从那里搬过来的。
 
+站内跳转演示：[跳到「代码块」一节](#代码块) · [跳到「数学公式」一节](#数学公式)。点完之后右上角会出现「回到原处」，地址栏也会跟着变，可以直接把某一节的链接发给别人。
+
 ## 文字与行内元素
 
 普通段落。**加粗**、*斜体*、***又粗又斜***、~~删除线~~、`行内代码`、以及[一个外部链接](https://api-docs.deepseek.com/)。中英文混排也应该看着舒服：The quick brown fox 跳过那只懒狗，标点、括号（像这样）与数字 12345 都要对齐。
@@ -53,6 +55,10 @@ export function apply(settings: ReadingSettings): void {
   document.documentElement.style.setProperty('--read-scale', String(settings.scale));
 }
 ```
+
+### 三级标题也会出现在目录里
+
+三级以下的标题默认在目录里折叠起来，点标题左边的三角展开——目录再长也不会把侧栏撑爆。
 
 ```python
 def fib(n: int) -> int:

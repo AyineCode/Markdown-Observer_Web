@@ -120,7 +120,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 14px;
-  border-radius: 16px;
+  border-radius: var(--pop-radius, 16px);
   transform-origin: top right;
   animation: pop-in 160ms var(--ease);
 }
@@ -301,6 +301,11 @@
   font-size: 11px;
   color: var(--dsw-alias-label-secondary);
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/** 这一行当前不生效（例如"无背景"下的模糊/遮罩）：灰掉但保留位置，避免面板跳动 */
+.field[data-off='true'] {
+  opacity: 0.45;
 }
 
 /* ─────────────────────────── 搜索条 ─────────────────────────── */
@@ -586,5 +591,374 @@ body[data-sidebar='open'] .scrim.visible {
 
   @page {
     margin: 18mm 16mm;
+  }
+}
+
+/* ─────────────────────────── 设置面板：三段 + 数值项 + 最近背景 ─────────────────────────── */
+
+/* 分段控件拉满宽度（侧栏顶部、设置面板顶部都用它） */
+.segmented.wide {
+  display: flex;
+  width: 100%;
+}
+
+.segmented.wide button {
+  flex: 1 1 0;
+  width: auto;
+  height: 26px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.segmented.wide button[aria-pressed='true'] {
+  color: var(--dsw-alias-label-primary);
+}
+
+.pop-tabs {
+  margin-bottom: 4px;
+}
+
+.pop-pane[hidden] {
+  display: none;
+}
+
+/* 一个数值项 = 标题行（标签 + 数字框）+ 滑杆 */
+.field {
+  margin-top: 12px;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.field-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 数字框：小而精确，去掉浏览器的上下箭头，看起来才像系统控件 */
+.num {
+  width: 64px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  -moz-appearance: textfield;
+  appearance: textfield;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.num::-webkit-outer-spin-button,
+.num::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.num:focus {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 22%, transparent);
+}
+
+.suffix {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.field .range {
+  margin-top: 2px;
+}
+
+.pop-note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 17px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.hint-inline {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pop-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.pop-foot-note {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* "最近使用"背景：5 个格子，空格子用虚线占位 */
+.recents {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.recent {
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 9px;
+  background-color: var(--dsw-alias-interactive-bg-hover);
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.recent:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.18);
+}
+
+.recent.active {
+  box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
+}
+
+.recent.empty {
+  border-style: dashed;
+  background: transparent;
+  cursor: default;
+}
+
+.recent.pending {
+  opacity: 0.45;
+}
+
+.recent.missing {
+  background-image: none;
+}
+
+/* ─────────────────────────── 玻璃按钮（统一配方） ─────────────────────────── */
+
+/*
+   设计意图（踩过的坑写在前面，免得以后再改回去）：
+
+   1. "磨砂"这件事由 backdrop-filter 提供，不是由底色提供。底色只负责"这片玻璃比周围
+      亮一点还是暗一点"，所以它必须跟着主题换方向：
+        · 浅色主题 → 淡墨（深色低透明度）：白纱叠在白底上等于没有，按钮会"消失"；
+        · 深色主题 → 淡光（白色低透明度）：深色叠在深色上看起来就是一块实心黑按钮。
+      这两个三元组在 styles/tuning.css 里（--btn-glass-veil 与 body[data-ds-dark-theme] 的覆盖）。
+
+   2. 切换型按钮用"一整块玻璃底板 + 一块小玻璃片"：底板是那条长玻璃，未选中的格子什么都不画
+      （按钮消失），只有选中的那一格盖上一小块玻璃。三种状态都做成同一块玻璃的话，
+      选中与未选中就分不出来了。
+
+   3. 所有按钮共用同一条规则，靠层叠顺序覆盖上面的旧底色，不用 !important；
+      想在某个按钮上破例，直接在它自己那一节里写。
+*/
+/* 块状按钮与卡片：一层薄玻璃 + 顶部高光 + 轻投影，**不描边**（干净的边界靠投影和高光）。
+   分段控件里的 button 故意不在这里——它是"底板上的一小块玻璃"，见下面那一段。 */
+.btn,
+.empty-card,
+.md-code-block .copyButton,
+.swatch.plain,
+.recent {
+  background-color: rgb(var(--btn-glass-veil) / var(--btn-glass-alpha));
+  border: none;
+  -webkit-backdrop-filter: blur(var(--btn-glass-blur, 10px)) saturate(var(--btn-glass-saturate, 150%));
+  backdrop-filter: blur(var(--btn-glass-blur, 10px)) saturate(var(--btn-glass-saturate, 150%));
+  box-shadow: var(--btn-glass-rim, inset 0 1px 0 rgb(255 255 255 / 0.5)), var(--btn-glass-lift, 0 1px 2px rgb(15 23 42 / 0.12));
+}
+
+/*
+   图标按钮：照 dsh 的做法——**默认什么都不画**，只有 hover 时浮出一层淡色。
+   出处：dsh 的 ui-sidebar/src/client/SidebarRoot.module.css 与 ui-workspace 的 .iconButton
+        （28×28、border: none、border-radius: 50%、background: transparent，hover 才是
+         var(--dsw-alias-interactive-bg-hover)）。
+   这里故意不用磨砂：它只是一次"手在上面"的反馈，磨砂既看不出来，还白白多一个 backdrop-filter。
+   侧栏收起后的"拉出小圆"（.sidebar-pull）是同一类，所以也在这里。
+*/
+.icon-btn,
+.sidebar-pull {
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.icon-btn:hover,
+.sidebar-pull:hover {
+  background-color: var(--dsw-alias-interactive-bg-hover);
+}
+
+/*
+   切换型按钮 = 一整块玻璃底板 + 一块小玻璃片：
+     · 底板（.segmented）：一条长玻璃，看得见边界；
+     · 未选中：什么都不画，按钮直接消失（只剩图标）；
+     · 选中：在底板上面盖一小块玻璃片（更实 + 描边 + 投影 + 磨砂）；
+     · 悬停：未选中的格子浮出一点点，告诉你这里可以点。
+   容器自己不加 backdrop-filter——它会成为里面小玻璃片的背景根，小片就没东西可糊了。
+*/
+.segmented {
+  background-color: rgb(var(--btn-glass-veil) / var(--seg-track-alpha, 0.10));
+  border: 1px solid var(--btn-glass-border);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), var(--btn-glass-lift, 0 1px 2px rgb(15 23 42 / 0.08));
+}
+
+/* 未选中：彻底透明 */
+.segmented button {
+  background-color: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+.btn:hover,
+.empty-card:hover,
+.md-code-block .copyButton:hover,
+.recent:hover {
+  background-color: rgb(var(--btn-glass-veil) / var(--btn-glass-alpha-hover));
+}
+
+/* 未选中的格子只在悬停时浮出一点点，鼠标一移开就消失 */
+.segmented button:not([aria-pressed='true']):hover {
+  background-color: rgb(var(--btn-glass-veil) / var(--btn-glass-alpha-hover));
+}
+
+/* 主按钮：仍然一眼是主题色，只是把实心换成"有色玻璃" */
+.btn.primary {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 85%, transparent);
+  color: #fff;
+}
+
+/* 复制按钮：dsh 里它是"无底色的小字"，这里给它一层玻璃，才像个按钮 */
+.md-code-block .copyButton {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.md-code-block .copyButton:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* "无背景"色板：直接预览那一层极淡渐变（画在玻璃底之上） */
+.swatch.plain {
+  background-image: var(--plain-bg);
+}
+
+/* "最近使用"里的空格子是个占位，不是按钮：保持透明 + 虚线 */
+.recent.empty {
+  background-color: transparent;
+  border: 1px dashed var(--btn-glass-border);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ↓↓↓ 选中态必须放在悬停规则之后：两者选择器权重相同，靠先后决定谁赢 ↓↓↓ */
+
+/* 选中/打开：盖在底板上的那一小块玻璃（更实 + 描边 + 投影 + 磨砂） */
+.segmented button[aria-pressed='true'],
+.icon-btn.on {
+  background-color: rgb(var(--btn-glass-on-veil) / var(--btn-glass-alpha-on));
+  border-color: var(--btn-glass-border-strong);
+  -webkit-backdrop-filter: blur(var(--btn-glass-blur, 10px)) saturate(var(--btn-glass-saturate, 150%));
+  backdrop-filter: blur(var(--btn-glass-blur, 10px)) saturate(var(--btn-glass-saturate, 150%));
+  box-shadow: var(--btn-glass-rim, inset 0 1px 0 rgb(255 255 255 / 0.5)), var(--btn-glass-lift, 0 1px 2px rgb(15 23 42 / 0.12));
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 分段控件里"打开"的那一格：文字/图标再重一点，与未选中的拉开距离 */
+.segmented.wide button[aria-pressed='true'] {
+  font-weight: 600;
+}
+
+/*
+   左下角的"设置"座位：它是**全局**入口（不属于某一篇文档），所以从顶栏搬到这里。
+   比普通按钮显眼一档：带文字标签、底色用专门的两档（--seat-glass-alpha / -hover），
+   磨砂与凸感和其它按钮同一套；固定定位，所以侧栏收起后它依然在。
+*/
+.settings-seat {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 15px 0 12px;
+  border: none;
+  border-radius: 12px;
+  background-color: rgb(var(--btn-glass-veil) / var(--seat-glass-alpha, 0.10));
+  -webkit-backdrop-filter: blur(var(--btn-glass-blur, 14px)) saturate(var(--btn-glass-saturate, 150%));
+  backdrop-filter: blur(var(--btn-glass-blur, 14px)) saturate(var(--btn-glass-saturate, 150%));
+  box-shadow: var(--btn-glass-rim, inset 0 1px 0 rgb(255 255 255 / 0.5)), var(--btn-glass-lift, 0 1px 2px rgb(15 23 42 / 0.12));
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.settings-seat svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+.settings-seat:hover {
+  background-color: rgb(var(--btn-glass-veil) / var(--seat-glass-alpha-hover, 0.18));
+}
+
+.settings-seat:active {
+  transform: scale(0.98);
+}
+
+/* 图标按钮的"打开"态（例如搜索条展开时）：它是一块玻璃片，所以要自己带上描边 */
+.icon-btn.on {
+  border: 1px solid var(--btn-glass-border-strong);
+}
+
+/* 图标类按钮的选中态：再叠一层主题色，仍然是玻璃 */
+.icon-btn.on {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent),
+    color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent));
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 32%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/*
+   不支持 backdrop-filter（老 Firefox、关了硬件加速）时：没有模糊就不能再透，
+   否则文字压在花背景上会看不清——退回 dsh 原本那种"实心但干净"的按钮底色。
+*/
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .btn,
+  .segmented,
+  .empty-card,
+  .md-code-block .copyButton,
+  .swatch.plain,
+  .recent {
+    background-color: var(--dsw-alias-button-elevated-fill);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>pixel-probe</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #fff; }
+  #frame { display: block; width: 1400px; height: 900px; border: 0; }
+  /* 量像素时这张页面除了 iframe 什么都不画，坐标才能 1:1 对上截图 */
+  #rects { position: fixed; left: -9999px; top: 0; white-space: pre; }
+</style>
+</head>
+<body>
+<iframe id="frame" src="/"></iframe>
+<pre id="rects">…</pre>
+<script>
+/*
+  像素探针：把阅读器装进一个铺满窗口的 iframe，按 ?theme=&bg= 摆好状态，
+  然后把需要采样的元素坐标写进 <pre id="rects">。
+  tools/pixels.mjs 会 dump 出这些坐标，再截一张图去量这些点到底是什么颜色。
+  为什么要这么绕：CSS 算出来的是"声明值"，只有真截图才能证明"磨砂是透的、选中是看得出来的"。
+*/
+const query = new URLSearchParams(location.search);
+const theme = query.get('theme') === 'dark' ? 'dark' : 'light';
+const bg = query.get('bg') === 'aurora' ? 1 : 0;   // 0 = 无背景，1 = 第一个内置渐变（极光）
+const glass = query.get('glass');                  // 面板不透明度（不填就用设置里的默认值）
+const btnBlur = query.get('btnblur');              // 按钮的磨砂半径（不填就用 tuning.css 的值）
+const frame = document.getElementById('frame');
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const TARGETS = [
+  ['primary', '#btn-open-file'],
+  ['icon', '.topbar .icon-btn'],
+  ['segOff', '.segmented button:not([aria-pressed="true"])'],
+  ['segOn', '.segmented button[aria-pressed="true"]'],
+  ['card', '#card-open'],
+  ['panelSide', '.sidebar'],
+  ['panelTop', '.topbar'],
+  ['page', 'html'],
+];
+
+frame.addEventListener('load', async () => {
+  const doc = frame.contentDocument;
+  await wait(500);
+  const style = doc.createElement('style');
+  style.textContent = '*, *::before, *::after { transition: none !important; animation: none !important; }';
+  doc.head.appendChild(style);
+  doc.querySelector('[data-theme="' + theme + '"]').click();
+  const swatches = doc.querySelectorAll('#swatches .swatch');
+  if (swatches.length > bg) swatches[bg].click();
+  // 注意：面板透明度由 app.js 写在 body 的内联样式上，探针也必须写在 body 才盖得住
+  if (glass !== null) doc.body.style.setProperty('--glass-alpha', glass);
+  if (btnBlur !== null) doc.documentElement.style.setProperty('--btn-glass-blur', btnBlur);
+  await wait(500);
+  const rects = {};
+  for (const [key, selector] of TARGETS) {
+    const el = doc.querySelector(selector);
+    if (el === null) { rects[key] = null; continue; }
+    const r = el.getBoundingClientRect();
+    // 采样点取"按钮内部靠左 5px、垂直居中"——避开居中的图标/文字笔画，只量底色
+    const point = key.startsWith('panel') || key === 'page'
+      ? { x: Math.round(r.left + 4), y: Math.round(r.top + 4) }
+      : { x: Math.round(r.left + 5), y: Math.round(r.top + r.height / 2) };
+    rects[key] = { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), px: point.x, py: point.y };
+  }
+  // "按钮旁边、面板上"的一个参照点：同一行、按钮左侧 12px
+  const primary = doc.querySelector('#btn-open-file').getBoundingClientRect();
+  rects.refSide = { px: Math.round(primary.left + 5), py: Math.round(primary.bottom + 16) };   // 按钮正下方的面板（16px 外，躲开投影）
+  // 凸感的两端：按钮内顶部那一道高光、按钮外下方那一层投影
+  rects.rimTop = { px: Math.round(primary.left + 8), py: Math.round(primary.top + 1) };
+  rects.edgeBottom = { px: Math.round(primary.left + 8), py: Math.round(primary.bottom - 1) };
+  rects.shadowBelow = { px: Math.round(primary.left + 8), py: Math.round(primary.bottom + 2) };
+  const segOn = doc.querySelector('.segmented button[aria-pressed="true"]').getBoundingClientRect();
+  rects.refTop = { px: Math.round(segOn.left < 60 ? segOn.right + 30 : segOn.left - 30), py: Math.round(segOn.top + segOn.height / 2) };
+  rects.meta = { theme, bg: bg === 1 ? 'aurora' : 'none', scale: window.devicePixelRatio };
+  document.getElementById('rects').textContent = JSON.stringify(rects);
+});
+</script>
+</body>
+</html>

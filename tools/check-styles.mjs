@@ -3,7 +3,7 @@
  *
  *   1. 保真度：styles/markdown.css 里的每条声明，是否都能在 dsh 的原文件里找到。
  *      （只比对"属性: 值"，类名改写不算差异——CSS Modules 的哈希类名本来就搬不过来）
- *   2. CSS 变量：所有 var(--x) 引用是否都有定义（含 JS 运行时写入的那几个）。
+ *   2. CSS 变量：所有 var(--x) 引用是否都有定义（含 JS 运行时写入的那几个，和 tuning.css 里的出口子）。
  *
  * 跑法：node tools/check-styles.mjs
  */
@@ -51,22 +51,25 @@ const originals = [
 ];
 const mine = declarations(readFileSync(join(APP, 'styles', 'markdown.css'), 'utf8'));
 let checked = 0;
+let missingDecl = 0;
 // .fileMention 是 dsh 聊天专有的"文件提及"按钮，阅读器没有这个功能，整块不搬。
 const skipRule = (selector) => selector.includes('fileMention');
 for (const rel of originals) {
   const source = readFileSync(join(DSH, rel), 'utf8');
   for (const decl of declarations(source, skipRule)) {
     checked += 1;
-    if (!mine.has(decl)) fail(rel.split('/').pop() + ' 里的声明没搬过来: ' + decl);
+    if (!mine.has(decl)) { missingDecl += 1; fail(rel.split('/').pop() + ' 里的声明没搬过来: ' + decl); }
   }
 }
-console.log('  比对了 ' + checked + ' 条声明，缺失 ' + (failures === 0 ? 0 : failures) + ' 条');
+console.log('  比对了 ' + checked + ' 条声明，缺失 ' + missingDecl + ' 条');
 
 console.log('2) CSS 变量：有没有引用未定义的 --变量');
 const sheets = [
   'styles/base.css', 'styles/design-platform.css', 'styles/scrollbar.css',
   'styles/gradient-shadow-text.css', 'styles/shiki.css', 'styles/markdown.css',
   'styles/highlight-dsh.css', 'styles/reader.css', 'styles/controls.css',
+  // 最后一层覆盖表：只是给上面几张表里的尺寸开出口子，不参与保真度比对
+  'styles/tuning.css',
 ];
 const defined = new Set();
 const used = new Map();
@@ -82,7 +85,8 @@ for (const rel of sheets) {
   }
 }
 // 这几个由 JS 在运行时写到 html/body 上，或者由浏览器提供
-const runtime = new Set(['--bg-image']);
+// 这几个由 JS 在运行时写到 html 上（不在任何样式表里定义）
+const runtime = new Set(['--bg-image', '--docs-pane-max']);
 let missing = 0;
 for (const [name, where] of used) {
   if (defined.has(name) || runtime.has(name)) continue;

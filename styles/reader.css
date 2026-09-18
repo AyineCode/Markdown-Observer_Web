@@ -27,11 +27,26 @@
 
   /* 玻璃面板：用 rgb 三元组 + 透明度两个变量，方便滑杆调透明度 */
   --glass-rgb: 255 255 255;
-  --glass-alpha: 0.72;
+  --glass-alpha: 0.5;   /* 出厂值：面板越透，背景的颜色越能透到按钮上；设置面板里可调 */
   --glass-blur: 30px;
   --glass-saturate: 180%;
   --glass-border: rgb(255 255 255 / 0.55);
   --glass-shadow: 0 18px 50px rgb(15 23 42 / 0.16), 0 2px 8px rgb(15 23 42 / 0.06);
+
+  /* 按钮的玻璃配方：出厂值在这里，styles/tuning.css 里有一份同名覆盖层（改那份即可）。
+     浅色主题用"淡墨"：白纱叠在白底上等于没有；深色主题换成"淡光"，见下面 body 的那一段。 */
+  --btn-glass-veil: 38 49 72;
+  --btn-glass-alpha: 0;
+  --btn-glass-alpha-hover: 0.06;
+  --btn-glass-rim: inset 0 1px 0 rgb(255 255 255 / 0.75), inset 0 -1px 0 rgb(15 23 42 / 0.12);
+  --seat-glass-alpha: 0.10;
+  --seat-glass-alpha-hover: 0.18;
+  --seg-track-alpha: 0.10;
+  --btn-glass-on-veil: 255 255 255;
+  --btn-glass-alpha-on: 0.75;
+  --btn-glass-border: rgb(0 0 0 / 0.10);
+  --btn-glass-border-strong: rgb(0 0 0 / 0.16);
+  --btn-glass-lift: 0 1px 2px rgb(15 23 42 / 0.14), 0 2px 6px rgb(15 23 42 / 0.06);
   /* 页面最底层的颜色：没有背景图时看到的就是它 */
   --page-bg: var(--dsw-alias-bg-base);
 
@@ -43,9 +58,22 @@
 /* 暗色：玻璃更暗、描边更淡、阴影更重；遮罩强度由 JS 按主题自动调整 */
 body[data-ds-dark-theme] {
   --glass-rgb: 28 28 30;
-  --glass-alpha: 0.62;
+  /* 面板透明度不在这里定：它由设置面板的滑杆决定（app.js 写在 body 的内联样式上）,
+     这里再写一份会把滑杆盖掉——深色主题下滑杆曾经就是这么失效的。 */
   --glass-border: rgb(255 255 255 / 0.09);
   --glass-shadow: 0 22px 60px rgb(0 0 0 / 0.45), 0 2px 10px rgb(0 0 0 / 0.3);
+  /* 按钮换成"淡光"：深色叠深色会看成一块实心黑按钮，白色低透明度才是玻璃 */
+  --btn-glass-veil: 255 255 255;
+  --btn-glass-alpha: 0;
+  --btn-glass-alpha-hover: 0.06;
+  --btn-glass-rim: inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 -1px 0 rgb(0 0 0 / 0.28);
+  --seat-glass-alpha: 0.12;
+  --seat-glass-alpha-hover: 0.2;
+  --seg-track-alpha: 0.10;
+  --btn-glass-alpha-on: 0.24;
+  --btn-glass-border: rgb(255 255 255 / 0.14);
+  --btn-glass-border-strong: rgb(255 255 255 / 0.24);
+  --btn-glass-lift: 0 1px 2px rgb(0 0 0 / 0.35);
   --page-bg: var(--dsw-static-neutral-bluish-950);
 }
 
@@ -123,8 +151,8 @@ button, input, select, textarea {
   background-size: cover;
   background-position: center;
   /* 轻微放大：模糊会让边缘露出底色，放大一点就看不到了 */
-  transform: scale(var(--bg-scale));
-  filter: blur(var(--bg-blur)) saturate(1.05);
+  transform: scale(var(--bg-scale, 1.08));
+  filter: blur(var(--bg-blur, 22px)) saturate(1.05);
   transition: filter var(--dur-slow) var(--ease), transform var(--dur-slow) var(--ease);
 }
 
@@ -142,23 +170,39 @@ body:not([data-ds-dark-theme]) .bg::after {
   background: rgb(255 255 255 / calc(var(--bg-dim) * 0.9));
 }
 
-/* 背景关闭时（纯色模式）不渲染图片层 */
+/*
+   "无背景"模式：不是死白/死黑，而是一层极淡的对角渐变 + 一点左上角微光。
+   颜色不写死：从当前主题的页面底色里按比例混出更深/更浅的一档，于是
+   浅色主题得到"白 → 极浅灰"、深色主题得到"近黑 → 稍亮的黑"，两边不用各写一套。
+   设置面板里的"无背景"色板直接复用这个变量，所见即所得。
+*/
+:root {
+  --plain-bg:
+    radial-gradient(120% 85% at 12% -12%,
+      color-mix(in srgb, var(--dsw-alias-state-business-primary) 7%, transparent) 0%,
+      transparent 62%),
+    linear-gradient(158deg,
+      color-mix(in srgb, var(--page-bg) 96%, var(--dsw-alias-label-primary)) 0%,
+      var(--page-bg) 46%,
+      color-mix(in srgb, var(--page-bg) 90%, var(--dsw-alias-label-primary)) 100%);
+}
+
 body[data-bg-mode='none'] .bg {
-  background-image: none;
-  filter: none;
+  background-image: var(--plain-bg);
+  filter: none;      /* 渐变不需要模糊，也不需要放大 */
   transform: none;
 }
 
 body[data-bg-mode='none'] .bg::after {
-  background: transparent;
+  background: transparent;   /* 这一模式没有图片要压，遮罩滑杆对它无效 */
 }
 
 /* ─────────────────────────── 5. 玻璃面板 ─────────────────────────── */
 
 .glass {
   background: rgb(var(--glass-rgb) / var(--glass-alpha));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 30px)) saturate(var(--glass-saturate, 180%));
+  backdrop-filter: blur(var(--glass-blur, 30px)) saturate(var(--glass-saturate, 180%));
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
   transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
@@ -184,169 +228,6 @@ body[data-sidebar='closed'] .app {
   --sidebar-w: 0px;
 }
 
-/* ─────────────────────────── 7. 侧栏（文件树 + 目录） ─────────────────────────── */
-
-.sidebar {
-  position: relative;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  height: 100vh;
-  padding: 14px 12px;
-  gap: 10px;
-  border-radius: 0;
-  border: none;
-  border-right: 1px solid var(--glass-border);
-  box-shadow: none;
-  overflow: hidden;
-  transition: transform var(--dur-slow) var(--ease), opacity var(--dur) var(--ease);
-}
-
-body[data-sidebar='closed'] .sidebar {
-  transform: translateX(-102%);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px 8px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.sidebar-brand .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--dsw-alias-state-business-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent);
-}
-
-.sidebar-brand .root-name {
-  font-weight: 400;
-  color: var(--dsw-alias-label-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-section {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 2px;
-  margin: 0 -2px;
-}
-
-/* 文件列表可以长，给一个上限；目录（TOC）占剩下的空间 */
-.sidebar-section.files {
-  max-height: 38vh;
-  flex: 0 1 auto;
-}
-
-.sidebar-section.toc {
-  flex: 1 1 auto;
-}
-
-.section-label {
-  flex: none;
-  padding: 10px 8px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.sidebar-divider {
-  flex: none;
-  height: 1px;
-  margin: 6px 8px 0;
-  background: var(--dsw-alias-border-l2);
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
-  line-height: 20px;
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
-}
-
-.row:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-.row.active {
-  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
-  color: var(--dsw-alias-label-primary);
-  font-weight: 500;
-}
-
-.row .name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.row .dir {
-  flex: none;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
-}
-
-.row.toc-row {
-  position: relative;
-}
-
-.row.toc-row .name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.row.toc-row.level-1 { padding-left: 8px; font-weight: 500; }
-.row.toc-row.level-2 { padding-left: 20px; }
-.row.toc-row.level-3 { padding-left: 32px; font-size: 12px; }
-.row.toc-row.level-4 { padding-left: 44px; font-size: 12px; }
-
-.row.toc-row.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--dsw-alias-state-business-primary);
-}
-
-.sidebar-empty {
-  padding: 8px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
 /* ─────────────────────────── 8. 主舞台 ─────────────────────────── */
 
 .stage {
@@ -365,7 +246,7 @@ body[data-sidebar='closed'] .sidebar {
   top: 0;
   left: 0;
   right: 0;
-  height: 2px;
+  height: var(--progress-h, 2px);
   z-index: 60;
   pointer-events: none;
 }
@@ -391,7 +272,7 @@ body[data-sidebar='closed'] .sidebar {
   max-width: var(--read-width);
   margin: 0 auto 14px;
   padding: 8px 10px;
-  border-radius: 14px;
+  border-radius: var(--topbar-radius, 14px);
 }
 
 .topbar .title-wrap {
@@ -433,8 +314,8 @@ body[data-sidebar='closed'] .sidebar {
   width: 100%;
   max-width: var(--read-width);
   margin: 0 auto;
-  padding: 44px 52px 52px;
-  border-radius: 20px;
+  padding: var(--doc-pad, 44px 52px 52px);
+  border-radius: var(--doc-radius, 20px);
   transition: max-width var(--dur-slow) var(--ease);
 }
 
@@ -516,4 +397,666 @@ body[data-reading='true'] .empty {
 
 body[data-reading='false'] .doc-foot {
   display: none;
+}
+
+/* ─────────────────────────── 7. 侧栏（头部 + 分段 + 文件树 + 目录） ─────────────────────────── */
+
+/* 侧栏自己的骨架：头部固定，主体滚动。收起由 body[data-sidebar] 控制。 */
+.sidebar {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+  border-right: 1px solid var(--glass-border);
+  box-shadow: none;
+  overflow: hidden;
+  transition: transform var(--dur-slow) var(--ease), opacity var(--dur) var(--ease);
+}
+
+body[data-sidebar='closed'] .sidebar {
+  transform: translateX(-102%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.brand .dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent);
+}
+
+.brand-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 根目录行：只在知道根目录时出现（服务模式或浏览器原生文件夹模式） */
+.root-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 0 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.root-line svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.root-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 8px 16px;
+}
+
+.pane[hidden] {
+  display: none;
+}
+
+.section-label {
+  padding: 12px 6px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.sidebar-empty {
+  padding: 10px 8px;
+  font-size: 12px;
+  line-height: 19px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 通用行（目录项、文件项、打开的文档都用它） */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--row-min-h, 28px);
+  padding: 4px var(--row-pad-x, 8px);
+  border: none;
+  border-radius: var(--row-radius, 8px);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.row.active {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.row .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 打开的文档：一行 = 打开按钮 + 关闭按钮 ── */
+.doc-row {
+  padding: 0;
+  gap: 0;
+}
+
+.doc-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px 4px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.doc-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+/* 关闭按钮只在悬停/选中时出现：安静，但需要时就在 */
+.doc-row:hover .doc-close,
+.doc-row.active .doc-close,
+.doc-close:focus-visible {
+  opacity: 1;
+}
+
+.doc-close:hover {
+  background: var(--dsw-alias-interactive-bg-hover-accent);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* ── 文件树（可折叠，像 Unity 的层级面板） ── */
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tree-row {
+  gap: 6px;
+}
+
+.tree-row .twisty {
+  flex: none;
+  width: var(--twisty-w, 16px);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: var(--twisty-size, 13px);
+  line-height: 1;
+  transition: transform var(--dur) var(--ease);
+}
+
+.tree-row.dir {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.tree-row.file {
+  font-weight: 400;
+}
+
+/* ── 目录项：层级缩进 + 左侧激活条 ── */
+.row.toc-row {
+  position: relative;
+}
+
+.row.toc-row.level-1 { padding-left: 8px; font-weight: 500; }
+.row.toc-row.level-2 { padding-left: 20px; }
+.row.toc-row.level-3 { padding-left: 32px; font-size: 12px; }
+.row.toc-row.level-4 { padding-left: 44px; font-size: 12px; }
+
+.row.toc-row.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--dsw-alias-state-business-primary);
+}
+
+/* ── 顶部按钮：整块宽度的主操作（打开文件） ── */
+.btn.block {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.btn.block svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.btn.block .kbd-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+}
+
+.icon-btn.tiny {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+.icon-btn.tiny svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ── 跳转提示条 ── */
+.jump-chip {
+  position: fixed;
+  z-index: 85;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%) translateY(-8px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 7px 8px 7px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.jump-chip.show {
+  opacity: 1;
+  transform: translateX(-50%);
+}
+
+.jump-chip[hidden] {
+  display: none;
+}
+
+.jump-chip strong {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  max-width: 300px;
+  vertical-align: bottom;
+}
+
+.btn.tiny {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+/* 跳转目标闪一下：让眼睛知道"就是这里" */
+.markdown .flashed {
+  animation: flash-target 1.5s var(--ease);
+  border-radius: 6px;
+}
+
+@keyframes flash-target {
+  0% { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 26%, transparent); }
+  100% { background: transparent; }
+}
+
+
+/* ─────────────────────────── 侧栏：上下两区 + 可拖动分隔 + 拉出按钮 ─────────────────────────── */
+
+.sidebar-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 两区共用：各自滚动，互不影响 */
+.pane {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 8px 12px;
+}
+
+/* 文档区：高度随内容，最多到 --docs-pane-max（这个上限可以拖） */
+.pane-docs {
+  flex: 0 1 auto;
+  max-height: var(--docs-pane-max, 45%);
+}
+
+/* 目录区：吃掉剩下的全部高度 */
+.pane-toc {
+  flex: 1 1 auto;
+  padding-top: 0;
+}
+
+/* 分隔线：看着是 1px，实际有 5px 的抓取高度（手指/鼠标都好点） */
+.splitter {
+  flex: none;
+  position: relative;
+  height: 5px;
+  margin: 0 8px;
+  cursor: row-resize;
+}
+
+.splitter::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 1px;
+  background: var(--dsw-alias-border-l2);
+  transition: background var(--dur) var(--ease);
+}
+
+.splitter:hover::before,
+body[data-splitting='true'] .splitter::before {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+/* 侧栏收起后的拉出按钮：舞台左上角的小圆 */
+.sidebar-pull {
+  position: fixed;
+  left: 14px;
+  top: 14px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--pull-size, 36px);
+  height: var(--pull-size, 36px);
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  /* 默认不画底板：它跟顶栏那些图标按钮同一类，规则在 controls.css 的"图标按钮"一节 */
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.9);
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+body[data-sidebar='closed'] .sidebar-pull {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.sidebar-pull:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.sidebar-pull:active {
+  transform: scale(0.94);
+}
+
+.sidebar-pull svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+/* 窄屏（侧栏是抽屉、顶栏占满宽度）时，给拉出按钮让出位置，避免叠在一起 */
+@media (max-width: 1080px) {
+  body[data-sidebar='closed'] .topbar {
+    padding-left: 48px;
+  }
+}
+
+/* ─────────────────────────── 侧栏：一个滚动容器装两区（头部固定） ─────────────────────────── */
+
+/*
+   为什么要共享滚动：目录可能很长，如果两个区各自滚动，中间那条分隔线就会被挤得很难抓；
+   改成"头部固定 + 下面整体一个滚动条"之后，目录再长也只是往下滚，读数时手腕不用换地方。
+*/
+.sidebar-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: block;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sidebar-pad-top, 10px) var(--sidebar-pad-x, 8px) var(--sidebar-pad-bottom, 62px);
+}
+
+/* 两区不再各自滚动、不再分配高度：内容多高就多高，由外层统一滚。
+   这里显式写 overflow-x / overflow-y 两个长写而不是 overflow 简写：
+   简写在某些实现里不会被展开成长写属性，排查样式冲突时容易看错。 */
+.pane,
+.pane-docs,
+.pane-toc {
+  overflow-x: visible;
+  overflow-y: visible;
+  max-height: none;
+  padding: 0;
+}
+
+/* 目录区与文档区之间：一条细分隔线 + 一点间距，仅作视觉分组 */
+.pane-toc {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* 目录项也可以折叠：三角可点、标题文字可点，两个热区分开 */
+.toc-row .twisty {
+  flex: none;
+  width: var(--twisty-w, 16px);
+  margin-left: -2px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: var(--twisty-size, 13px);
+  line-height: 1;
+  text-align: center;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease);
+}
+
+.toc-row .twisty:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 没有子标题的行：留同样宽的占位，标题才对齐 */
+.toc-row .twisty.spacer {
+  cursor: default;
+}
+
+/* 侧栏这一区的行更紧凑一点（目录可能很长） */
+.toc-row {
+  min-height: 26px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+/* ─────────────────────────── 空状态（第一次打开时的引导页） ─────────────────────────── */
+
+/*
+   设计要点：一屏里有四个层次——标记 / 标题 / 说明 / 行动，靠间距拉开节奏，
+   不用边框堆叠；三张卡片是真正可点的入口，按当前环境显隐（见 app.js 的 applyEmptyState）。
+*/
+.empty {
+  width: 100%;
+  max-width: 760px;
+  margin: 5vh auto 0;
+  padding: 46px 44px 34px;
+  border-radius: 24px;
+  text-align: center;
+}
+
+.empty-mark {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.empty-mark svg {
+  width: 44px;
+  height: 44px;
+  color: var(--dsw-alias-state-business-primary);
+  opacity: 0.92;
+}
+
+.empty h1 {
+  margin: 0 0 12px;
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.empty-sub {
+  /* 说明靠左更好读；块本身占满卡片那一行的宽度，左边缘与下面的卡片对齐 */
+  margin: 0 0 26px;
+  text-align: left;
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.empty-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  text-align: left;
+}
+
+/* 卡片：图标在左、文字在右，两者在同一条水平线上（图标与右侧两行文字垂直居中） */
+.empty-card {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+  /* 边框与底色来自 controls.css 的"玻璃按钮"统一配方（本表在它之前加载） */
+  border-radius: var(--card-radius, 14px);
+  color: inherit;
+  cursor: pointer;
+  transition: transform var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.empty-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--dsw-alias-border-l4);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.12);
+}
+
+.empty-card:active {
+  transform: translateY(0);
+}
+
+.empty-card[hidden] {
+  display: none;
+}
+
+/* 文字块：标题在上、说明在下，整体与左边的图标垂直居中对齐 */
+.card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;            /* 说明太长时换行，而不是把卡片撑变形 */
+}
+
+.card-icon {
+  display: flex;
+  flex: none;              /* 不参与拉伸，永远是正方形 */
+  align-items: center;
+  justify-content: center;
+  width: var(--card-icon-size, 34px);
+  height: var(--card-icon-size, 34px);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.card-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.card-note {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.empty-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.empty-keys {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+@media (max-width: 720px) {
+  .empty {
+    margin-top: 3vh;
+    padding: 30px 20px 26px;
+    border-radius: 18px;
+  }
+
+  .empty h1 {
+    font-size: 20px;
+  }
+
+  .empty-cards {
+    grid-template-columns: 1fr;
+  }
 }
