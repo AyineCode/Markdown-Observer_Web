@@ -1,12 +1,20 @@
-# 生成物：跑构建脚本会重新产出，不入库
-markdown-reader.html
-share/
-markdown-reader-share.zip
+# ─────────────────────────────────────────────────────────────
+#  什么不入库（其余全部入库）
+#
+#  生成物：跑构建脚本就能重新产出，没必要进版本库
+#    · markdown-reader.html —— tools/build-standalone.mjs 的产物（单文件版，1 MB）
+#    · share/               —— tools/build-share.mjs 的产物（发给朋友的三件套）
+#    · markdown-reader-v*.zip —— tools/release.mjs 的产物（发给别人 / 挂 Release 用）
+#  运行期文件：启动服务时写下的进程记录
+#  编辑器与系统的杂物
+# ─────────────────────────────────────────────────────────────
 
-# 运行时文件：启动服务时写下进程记录
+markdown-reader.html
+markdown-reader-v*.zip
+share/
+
 .md-reader.pid
 
-# 平台专用的临时启动工具（本机是 WSL，用不到这两个）
-start.bat
-stop.bat
-start.command
+.DS_Store
+Thumbs.db
+desktop.ini

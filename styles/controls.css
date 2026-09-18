@@ -268,7 +268,7 @@
 /* 背景预设色板 */
 .swatches {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));   /* 同上：别让 1fr 被 min-content 顶宽 */
   gap: 8px;
 }
 
@@ -709,9 +709,13 @@ body[data-sidebar='open'] .scrim.visible {
 }
 
 /* "最近使用"背景：5 个格子，空格子用虚线占位 */
+/*
+   5 个格子正好占满一行。写 minmax(0, 1fr) 而不是 1fr：1fr 的最小值是 auto（= 内容的 min-content），
+   一旦某个格子的 min-content 比"平均一份"还宽，整行就会被顶出去、最后一格被挤到边上。
+*/
 .recents {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   margin-top: 6px;
 }
@@ -737,9 +741,8 @@ body[data-sidebar='open'] .scrim.visible {
   box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
 }
 
-.recent.empty {
-  border-style: dashed;
-  background: transparent;
+/* 空格子：占位，不是按钮（类名不能叫 empty，见文件末尾那一段的说明） */
+.recent.slot {
   cursor: default;
 }
 
@@ -863,8 +866,13 @@ body[data-sidebar='open'] .scrim.visible {
   background-image: var(--plain-bg);
 }
 
-/* "最近使用"里的空格子是个占位，不是按钮：保持透明 + 虚线 */
-.recent.empty {
+/*
+   "最近使用"里的空格子：占位，不是按钮——透明 + 虚线。
+   类名故意不叫 empty：.empty 是"空状态面板"那个大面板的类名（上面有 max-width、margin: 5vh、
+   padding: 46px、圆角 24px），撞上去占位格子会被撑开、还会被 5vh 的外边距顶到下一行——
+   之前"背景和占位边框不在一行"就是这么来的。
+*/
+.recent.slot {
   background-color: transparent;
   border: 1px dashed var(--btn-glass-border);
   box-shadow: none;

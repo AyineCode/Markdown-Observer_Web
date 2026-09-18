@@ -209,6 +209,8 @@
     const rest = settings.recents.filter((item) => !(item.kind === entry.kind && (entry.kind === 'preset' ? item.id === entry.id : item.key === entry.key)));
     settings.recents = [entry, ...rest].slice(0, MAX_RECENTS);
     saveSettings();
+    // 就地重画那一行：不然刚换的背景要等下次打开面板才出现在"最近使用"里
+    renderRecents();
     void collectGarbage();
   }
 
@@ -349,8 +351,8 @@
       b.addEventListener('click', () => {
         settings.bgMode = 'preset';
         settings.bgPreset = preset.id;
+        rememberBackground({ kind: 'preset', id: preset.id });   // 先记，再应用："最近使用"才会立刻带上它
         applyBackground();
-        rememberBackground({ kind: 'preset', id: preset.id });
       })
       box.appendChild(b)
     }
@@ -392,8 +394,12 @@
     const key = 'img-' + Date.now().toString(36);
     settings.bgMode = 'image';
     settings.bgImageKey = key;
-    applyBackground();
+    // 顺序有讲究：界面先动，落库最后，而且不等它。
+    //   · "最近使用"的缩略图对"当前这张图"直接取内存里的 bgImage（见 renderRecents），
+    //     所以不必等 IndexedDB 写进去再读回来；
+    //   · 背景本身更不能等——库慢或不可用时，图也得立刻铺上去。
     rememberBackground({ kind: 'image', key });
+    applyBackground();
     try {
       await ImageStore.put(key, bgImage);
     } catch {
@@ -1719,6 +1725,11 @@
         btn.style.backgroundImage = preset.css;
         btn.title = preset.name;
         btn.setAttribute('aria-label', preset.name);
+      } else if (item.key === settings.bgImageKey && typeof bgImage === 'string') {
+        // 当前用的这张图就在内存里：直接画，不用等一次 IndexedDB 往返（刚设完的背景必须立刻有缩略图）
+        btn.title = '自定义图片';
+        btn.setAttribute('aria-label', '自定义图片');
+        btn.style.backgroundImage = 'url(' + JSON.stringify(bgImage) + ')';
       } else {
         btn.title = '自定义图片';
         btn.setAttribute('aria-label', '自定义图片');
@@ -1735,7 +1746,9 @@
     }
     for (let i = items.length; i < MAX_RECENTS; i += 1) {
       const slot = document.createElement('div');
-      slot.className = 'recent empty';
+      // 类名不能叫 empty：.empty 是"空状态面板"那个大面板的类名（max-width / margin / padding / 圆角都在那上面），
+      // 撞上去占位格子会被撑开、被推下一行。这里叫 slot，就是指"一个空格子"。
+      slot.className = 'recent slot';
       box.appendChild(slot);
     }
   }
@@ -1867,7 +1880,11 @@
     document.addEventListener('click', (event) => {
       const pop = $('popover');
       if (pop.hidden) return;
-      if (pop.contains(event.target)) return;
+      // 事件路径在派发时就固定了，所以即使这次点击把被点的元素重建掉（换背景会重画色板），
+      // 也能认出"这一点发生在面板里"——只靠 contains() 会误判成点在面板外，把面板关掉。
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+      if (path.includes(pop) || pop.contains(event.target)) return;
+      if (event.target !== null && event.target.isConnected === false) return;   // 兜底：已脱离文档的节点同样不算"外面"
       pop.hidden = true;
     });
   }

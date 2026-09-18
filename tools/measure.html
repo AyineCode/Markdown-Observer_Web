@@ -83,6 +83,36 @@ frame.addEventListener('load', async () => {
   const above = box.bottom <= seat.top + 1;
   log('设置弹层  left=' + Math.round(box.left) + '（座位 left=' + Math.round(seat.left) + '）  bottom=' + Math.round(box.bottom) + '（座位 top=' + Math.round(seat.top) + '）  视口=' + win.innerWidth + 'x' + win.innerHeight);
   log('设置弹层  完整在视口内=' + (inside ? 'yes' : 'no') + '  开在座位上方=' + (above ? 'yes' : 'no'));
+
+  // "最近使用"那一行：换一次背景后，5 个格子必须在同一行、等宽、边距一致
+  const swatches = doc.querySelectorAll('#swatches .swatch');
+  if (swatches.length > 1) swatches[1].click();
+  await wait(250);
+  const recents = [...doc.querySelectorAll('#recents .recent')];
+  const tops = new Set(recents.map((el) => Math.round(el.getBoundingClientRect().top)));
+  const heights = new Set(recents.map((el) => Math.round(el.getBoundingClientRect().height)));
+  const margins = new Set(recents.map((el) => win.getComputedStyle(el).marginTop));
+  const slots = recents.filter((el) => el.classList.contains('slot'));
+  log('最近使用  ' + recents.length + ' 个格子  行数=' + tops.size + '  高度种类=' + heights.size + '  上边距=' + [...margins].join('/'));
+  log('最近使用  空格子类名=slot ' + (slots.length > 0 ? 'yes' : '（当前没有空格子）') + '  空格子误匹配 .empty=' + (slots.some((el) => el.matches('.empty')) ? 'yes（错了）' : 'no'));
+
+  // 设一张图片当背景：背景和缩略图都必须"立刻"出现，不能等 IndexedDB，也不能等下一次重画
+  const canvas = doc.createElement('canvas');
+  canvas.width = 64; canvas.height = 40;
+  canvas.getContext('2d').fillRect(0, 0, 64, 40);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  const data = new win.DataTransfer();
+  data.items.add(new win.File([blob], 'probe.png', { type: 'image/png' }));
+  const fileInput = doc.getElementById('file-input');
+  fileInput.files = data.files;
+  fileInput.dispatchEvent(new win.Event('change', { bubbles: true }));
+  await wait(150);
+  const firstCell = doc.querySelector('#recents .recent');
+  const firstStyle = firstCell === null ? null : win.getComputedStyle(firstCell);
+  log('设图片背景  立刻 bgMode=' + doc.body.dataset.bgMode
+    + '  缩略图=' + ((firstStyle !== null && firstStyle.backgroundImage.startsWith('url(')) ? 'yes' : 'no（错了）')
+    + '  pending=' + (firstCell !== null && firstCell.classList.contains('pending'))
+    + '  --bg-image 长度=' + (doc.documentElement.style.getPropertyValue('--bg-image') || '').length);
   log('===== 结束 =====');
   document.getElementById('out').textContent = out.join('\n');
 });

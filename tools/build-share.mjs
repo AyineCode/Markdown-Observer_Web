@@ -6,12 +6,12 @@
  *   markdown-reader.html  单文件阅读器，双击即用，不需要装任何东西
  *   HOW-TO-OPEN.txt       五行说明，不用命令行
  *   sample.md             让朋友有东西可以马上试
- *   一个 zip               如果系统里有 zip 命令，顺手打一个（方便直接发人）
+ *
+ * 只负责"生成这个文件夹"；要打成一个 zip 发人，跑 node tools/release.mjs（那边是零依赖的打包）。
  *
  * 跑法：node tools/build-share.mjs
  */
 import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync, statSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildStandalone, OUT_NAME } from './build-standalone.mjs'
@@ -54,16 +54,7 @@ export function buildShare() {
     try { chmodSync(join(OUT_DIR, name), 0o644) } catch { /* 某些文件系统不支持，不影响使用 */ }
   }
 
-  // 有 zip 就顺手打一个（没有也不影响，文件夹本身就能发）
-  let zip = null;
-  const hasZip = spawnSync('zip', ['-v'], { stdio: 'ignore' }).status === 0;
-  if (hasZip) {
-    const target = join(APP, 'markdown-reader-share.zip');
-    rmSync(target, { force: true });
-    const result = spawnSync('zip', ['-r', '-q', target, '.'], { cwd: OUT_DIR });
-    if (result.status === 0) zip = target;
-  }
-  return { dir: OUT_DIR, zip, bytes: standalone.bytes };
+  return { dir: OUT_DIR, bytes: standalone.bytes };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -71,9 +62,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log('分享包已生成：' + result.dir);
   console.log('  阅读器：' + Math.round(result.bytes / 1024) + ' KB（单文件）');
   console.log('  说明：HOW-TO-OPEN.txt（给朋友看的，内容中文）');
-  if (result.zip !== null) {
-    console.log('  压缩包：' + result.zip + '（' + Math.round(statSync(result.zip).size / 1024) + ' KB）');
-  } else {
-    console.log('  （系统里没有 zip 命令，直接把 share/ 这个文件夹发出去也一样）');
-  }
+  console.log('  要发人：node tools/release.mjs（打成 markdown-reader-v<版本>.zip）');
 }

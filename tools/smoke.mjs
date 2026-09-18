@@ -283,6 +283,9 @@ check('超范围会被夹住', num.value, '140');
 document.querySelector('[data-ptab="bg"]').click();
 check('切到"背景"页', id('pop-bg').hidden, false);
 check('最近使用有 5 个格子', id('recents').querySelectorAll('.recent').length, 5);
+// 空格子以前叫 .recent.empty，和"空状态面板"的 .empty 撞名，被那套 max-width/margin/padding/圆角顶到下一行
+const slotCell = id('recents').querySelector('.recent.slot');
+check('空格子用 slot 类，且不匹配空状态面板的 .empty', slotCell !== null && slotCell.matches('.empty') === false, true);
 // "无背景"下模糊/遮罩没有作用对象：灰掉并给出说明，而不是让人以为滑杆坏了
 check('"无背景"下模糊被灰掉', id('r-blur').disabled && id('field-blur').dataset.off, 'true');
 check('"无背景"下遮罩被灰掉', id('r-dim').disabled && id('field-dim').dataset.off, 'true');
