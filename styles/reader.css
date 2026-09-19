@@ -330,56 +330,15 @@ body[data-reading='false'] .doc {
 
 /* ─────────────────────────── 9. 空状态 ─────────────────────────── */
 
-.empty {
-  width: 100%;
-  max-width: 560px;
-  margin: 8vh auto 0;
-  padding: 40px 40px 36px;
-  border-radius: 22px;
-  text-align: center;
-}
-
+/*
+  这里曾经有一整块"第一版空状态"的样式（.empty / .empty h1 / .empty p / .empty .actions / .empty .hint），
+  后来重做空状态时又写了一套（见下面"空状态（第一次打开时的引导页）"那一段），两套就这么并存了。
+  危险的是 .empty p ——新版没有对应规则，于是它会命中新版里的**每一个 <p>**：
+  刚加的那行小灰字说明被它按 14px 渲染（我们要的是 11px），.empty-sub 也一直靠它定字号。
+  现在把过时的那几条删掉，只留下还在用的：data-reading 那条兜底、以及 .empty kbd（快捷键盘的样子）。
+*/
 body[data-reading='true'] .empty {
   display: none;
-}
-
-.empty h1 {
-  margin: 0 0 8px;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-}
-
-.empty p {
-  margin: 0 0 22px;
-  font-size: 14px;
-  line-height: 22px;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.empty .actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: center;
-}
-
-.empty .hint {
-  margin-top: 22px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.empty kbd {
-  display: inline-block;
-  padding: 1px 6px;
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-bottom-width: 2px;
-  border-radius: 5px;
-  background: var(--dsw-alias-interactive-bg-hover);
-  font-family: var(--ds-font-family-code);
-  font-size: 11px;
 }
 
 /* 页脚：文档末尾的一点呼吸 */
@@ -994,12 +953,18 @@ body[data-sidebar='closed'] .sidebar-pull {
   display: none;
 }
 
-/* 文字块：标题在上、说明在下，整体与左边的图标垂直居中对齐 */
+/*
+   文字块：标题在上、说明在下，整体与左边的图标垂直居中对齐；
+   文字本身在**这一块自己的宽度里**居中——卡片左边还占着一个图标，
+   按整个按钮居中会把它挤得偏向图标那一侧。
+*/
 .card-text {
   display: flex;
   flex-direction: column;
   gap: 3px;
   min-width: 0;            /* 说明太长时换行，而不是把卡片撑变形 */
+  flex: 1 1 auto;          /* 占满图标右边的全部空间，居中才有意义 */
+  text-align: center;
 }
 
 .card-icon {
@@ -1031,6 +996,14 @@ body[data-sidebar='closed'] .sidebar-pull {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 卡片下面那行小灰字：补充说明，不参与卡片的排布（塞进卡片会把那一行卡片撑高） */
+.empty-note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .empty-foot {
   display: flex;
   flex-wrap: wrap;
@@ -1038,6 +1011,18 @@ body[data-sidebar='closed'] .sidebar-pull {
   justify-content: center;
   gap: 14px;
   margin-top: 28px;
+}
+
+/* 快捷键提示里的 <kbd>（.empty-keys 里面那几个键帽） */
+.empty kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
 }
 
 .empty-keys {

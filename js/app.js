@@ -1516,6 +1516,13 @@
    */
   function openDirectory() {
     if (serverRoot !== null) { toast('服务模式已经指定了根目录'); return }
+    /*
+      先说一句再弹选择框：这种打开方式下，浏览器必须把选中的文件夹**整个通读一遍**才能
+      把文件交给我们（node_modules 也不例外——实测一个代码仓库有 7 万个文件，其中 5.6 万个
+      在 node_modules 里），这一步可能要等很久。先提示一下，免得以为按钮坏了。
+      真遇到大仓库，服务模式（./start.sh）在后台遍历、还会跳过这些目录，快得多。
+    */
+    toast('选好文件夹后请稍等：文件夹很大时（比如代码仓库）浏览器要先整个读一遍');
     $('folder-input').click();
   }
 
@@ -1538,6 +1545,7 @@
   function readFolder(fileList) {
     const files = Array.from(fileList ?? []);
     if (files.length === 0) return;   // 用户取消（取消时不会触发 change，这里是兜底）
+    const total = files.length;       // 浏览器一共交来多少（含我们马上会跳过的 node_modules）
     folderFiles.clear();
     const paths = [];
     let rootName = '';
@@ -1562,9 +1570,13 @@
     setTree(paths);
     setSidebar(true);
     applyEmptyState();
+    const notes = [];
+    if (capped) notes.push('只列了前 ' + MAX_FOLDER_FILES + ' 篇');
+    // 交来的文件特别多时解释一句：为什么慢、为什么树里看不到 node_modules
+    if (total > 20000) notes.push('这个文件夹一共 ' + total + ' 个文件，node_modules / .git 之类已跳过');
     toast(paths.length === 0
       ? '这个文件夹里没有 markdown 文件'
-      : ('找到 ' + paths.length + ' 个 markdown 文件' + (capped ? '（只列了前 ' + MAX_FOLDER_FILES + ' 篇）' : '')));
+      : ('找到 ' + paths.length + ' 个 markdown 文件' + (notes.length > 0 ? '（' + notes.join('；') + '）' : '')));
   }
 
   /**

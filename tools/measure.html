@@ -73,6 +73,26 @@ frame.addEventListener('load', async () => {
   await wait(500);
   measure(doc, '强制深色');
 
+  // 空状态卡片：文字要在「自己那块空间」里居中（左边还有图标）；那行小灰字在卡片下方
+  const card = doc.getElementById('card-open');
+  if (card !== null && card.hidden === false) {
+    const textBlock = card.querySelector('.card-text');
+    const titleSpan = card.querySelector('.card-title');
+    const range = doc.createRange();
+    range.selectNodeContents(titleSpan);
+    const glyph = range.getBoundingClientRect();
+    const block = textBlock.getBoundingClientRect();
+    const offset = Math.abs((glyph.left + glyph.right) / 2 - (block.left + block.right) / 2);
+    const note = doc.querySelector('.empty-note');
+    const cardRect = card.getBoundingClientRect();
+    const noteRect = note === null ? null : note.getBoundingClientRect();
+    const sub = doc.querySelector('.empty-sub');
+    log('空状态卡片  标题文字居中偏移=' + offset.toFixed(1) + 'px（0 表示正居中）'
+      + '  卡片高=' + Math.round(cardRect.height)
+      + '  说明行=' + (note === null ? '找不到' : ('字号 ' + win.getComputedStyle(note).fontSize + '，在卡片下方 ' + (noteRect.top >= cardRect.bottom ? 'yes' : 'no')))
+      + '  正文说明=' + (sub === null ? '找不到' : (win.getComputedStyle(sub).fontSize + '/' + win.getComputedStyle(sub).lineHeight + ' 对齐 ' + win.getComputedStyle(sub).textAlign)));
+  }
+
   // 设置弹层：入口在左下角，所以它必须翻到按钮上方并完整落在视口里
   doc.getElementById('btn-settings').click();
   await wait(300);

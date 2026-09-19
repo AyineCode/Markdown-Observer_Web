@@ -177,6 +177,12 @@ const cardStyle = window.getComputedStyle(id('card-open'));
 check('卡片横排：图标与文字在同一水平线上', cardStyle.flexDirection, 'row');
 check('图标与右侧两行文字垂直居中对齐', cardStyle.alignItems, 'center');
 check('文字块里是标题 + 说明两行', id('card-open').querySelector('.card-text').children.length, 2);
+// 文字要在"自己那块空间"里居中：卡片左边还有图标，按整个按钮居中会偏
+check('卡片文字在自己那块里居中', window.getComputedStyle(id('card-open').querySelector('.card-text')).textAlign, 'center');
+// "大仓库请用服务模式"是卡片下面单独一行小灰字，不是卡片里的第三行
+const emptyNote = document.querySelector('.empty-note');
+check('大仓库提示在卡片外、单独一行', emptyNote !== null && emptyNote.textContent.includes('服务模式'), true);
+check('它在卡片那一行之后', emptyNote !== null && emptyNote.previousElementSibling === id('empty').querySelector('.empty-cards'), true);
 check('说明段落靠左对齐', window.getComputedStyle(document.querySelector('.empty-sub')).textAlign, 'left');
 check('卡片也走玻璃配方', cardStyle.backdropFilter.includes('blur') && bgText(cardStyle).includes('--btn-glass-veil'), true);
 
