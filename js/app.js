@@ -1243,7 +1243,7 @@
         name = data.name;
         size = data.size;
       } else if (folderFiles.has(path)) {
-        const file = await folderFiles.get(path).getFile();
+        const file = folderFiles.get(path);   // 文件夹模式里存的就是 File 对象
         text = await file.text();
         name = file.name;
         size = file.size;
@@ -1503,54 +1503,68 @@
      Chromium 系浏览器允许网页读取用户主动选择的文件夹，于是没有服务器也能有文件树；
      Firefox / Safari 没有这个能力，按钮会给出提示，其余功能照常。
   */
-  /** 用户在文件夹模式里选中的目录句柄。 */
-  let folderHandle = null;
-  /** 路径 → 文件句柄（文件夹模式下用它读文件）。 */
+  /** 路径 → File（文件夹模式下用它读正文与图片）。 */
   const folderFiles = new Map();
   /** 遍历时跳过的目录名。 */
   const SKIP_DIR_NAMES = new Set(['node_modules', '.git', 'dist', 'build', 'out', 'vendor', 'venv', '.venv', '__pycache__']);
   /** 文件夹模式下生成的图片 blob URL，切换文档时要回收。 */
   let localImageUrls = [];
 
-  /** 让用户选一个文件夹（仅 Chromium 系支持）。 */
-  async function openDirectory() {
+  /**
+   * 让用户选一个文件夹：点一下那个 hidden 的 <input webkitdirectory>（见 index.html）。
+   * 选完由 readFolder 接手——真正的读目录逻辑在那里，因为这个函数只是"打开选择框"。
+   */
+  function openDirectory() {
     if (serverRoot !== null) { toast('服务模式已经指定了根目录'); return }
-    if (typeof window.showDirectoryPicker !== 'function') {
-      toast('这个浏览器不能读文件夹。把文件拖进来，或用服务模式打开');
-      return;
-    }
-    let handle;
-    try {
-      handle = await window.showDirectoryPicker({ mode: 'read' });
-    } catch {
-      return;   // 用户取消（AbortError），不需要报错
-    }
-    folderHandle = handle;
+    $('folder-input').click();
+  }
+
+  /** 一次最多收多少篇：目录太大时先保证界面还能用。 */
+  const MAX_FOLDER_FILES = 3000;
+
+  /**
+   * 把 <input webkitdirectory> 交上来的一批文件整理成左侧那棵目录树。
+   *
+   * 为什么不用 File System Access 的 showDirectoryPicker：
+   *   它只在"安全上下文 + 允许的源"里可靠，而在 **file:// 打开的页面上会卡住**——
+   *   系统对话框弹得出来、用户也能选，但返回的 promise 一直不落地，于是"选完文件夹什么都没发生"。
+   *   <input webkitdirectory> 是浏览器里更老、更笨、但哪都能用的做法：Chrome / Edge / Firefox / Safari
+   *   都支持，file:// 也照常，而且拿到的直接是 File 对象，读正文和图片都更省事。
+   *
+   * 相对路径来自 file.webkitRelativePath，形如 "notes/docs/a.md"——第一段是用户选的文件夹名，
+   * 后面的部分才是树里的路径，所以根目录名单独取出来显示。
+   * @param {FileList | File[] | null} fileList 选择框交上来的文件
+   */
+  function readFolder(fileList) {
+    const files = Array.from(fileList ?? []);
+    if (files.length === 0) return;   // 用户取消（取消时不会触发 change，这里是兜底）
     folderFiles.clear();
     const paths = [];
-    await walkDirectory(handle, '', paths, 0);
+    let rootName = '';
+    let capped = false;
+    for (const file of files) {
+      const rel = typeof file.webkitRelativePath === 'string' && file.webkitRelativePath !== ''
+        ? file.webkitRelativePath
+        : file.name;
+      const parts = rel.split('/');
+      if (parts.length < 2) continue;                      // 没在子目录里的条目，跳过
+      rootName = parts[0];
+      const path = parts.slice(1).join('/');
+      if (path.split('/').some((seg) => seg.startsWith('.') || SKIP_DIR_NAMES.has(seg))) continue;
+      if (!/\.(md|markdown|mdown|mkd|txt)$/i.test(path)) continue;
+      if (paths.length >= MAX_FOLDER_FILES) { capped = true; continue }
+      folderFiles.set(path, file);
+      paths.push(path);
+    }
     paths.sort((a, b) => a.localeCompare(b, 'zh'));
-    $('root-name').textContent = handle.name;
-    $('root-line').hidden = false;
+    $('root-name').textContent = rootName;
+    $('root-line').hidden = rootName === '';
     setTree(paths);
     setSidebar(true);
     applyEmptyState();
-    toast(paths.length === 0 ? '这个文件夹里没有 markdown 文件' : ('找到 ' + paths.length + ' 个 markdown 文件'));
-  }
-
-  /** 递归遍历目录，收集 markdown 文件的相对路径与句柄。 */
-  async function walkDirectory(dirHandle, prefix, out, depth) {
-    if (depth > 8) return;
-    for await (const entry of dirHandle.values()) {
-      if (entry.name.startsWith('.') || SKIP_DIR_NAMES.has(entry.name)) continue;
-      const path = prefix === '' ? entry.name : prefix + '/' + entry.name;
-      if (entry.kind === 'directory') {
-        await walkDirectory(entry, path, out, depth + 1);
-      } else if (/\.(md|markdown|mdown|mkd|txt)$/i.test(entry.name)) {
-        folderFiles.set(path, entry);
-        out.push(path);
-      }
-    }
+    toast(paths.length === 0
+      ? '这个文件夹里没有 markdown 文件'
+      : ('找到 ' + paths.length + ' 个 markdown 文件' + (capped ? '（只列了前 ' + MAX_FOLDER_FILES + ' 篇）' : '')));
   }
 
   /**
@@ -1571,10 +1585,10 @@
         if (seg === '..') parts.pop();
         else parts.push(seg);
       }
-      const handle = folderFiles.get(parts.join('/'));
-      if (handle === undefined) continue;
+      const file = folderFiles.get(parts.join('/'));
+      if (file === undefined) continue;
       try {
-        const url = URL.createObjectURL(await handle.getFile());
+        const url = URL.createObjectURL(file);
         localImageUrls.push(url);
         img.src = url;
       } catch {
@@ -1706,7 +1720,17 @@
   function applyEmptyState() {
     const hasListing = serverRoot !== null || folderFiles.size > 0;
     $('card-browse').hidden = !hasListing;
-    $('card-folder').hidden = hasListing || typeof window.showDirectoryPicker !== 'function';
+    $('card-folder').hidden = hasListing;   // 现在任何浏览器都能读文件夹，不用再藏
+    // 选完文件夹之后，中间那块空状态还是原来那句"把文件拖进来"——用户会以为没反应。
+    // 这里让它改口说清楚"东西在左边"，这也是"选完文件夹之后到底发生了什么"的即时反馈。
+    const folderCount = folderFiles.size;
+    if (folderCount > 0) {
+      $('empty-sub').textContent = '左侧已经列出这个文件夹里的 ' + folderCount + ' 篇文档——点一篇就开始读。';
+    } else if (serverRoot !== null) {
+      $('empty-sub').textContent = '把 .md 文件拖进窗口，或点左侧文件树里的文件：';
+    } else {
+      $('empty-sub').textContent = '排版与 DeepSeek Harness 的聊天正文一致，字号、行距、背景都可以调。把 .md 文件拖进窗口，或选一种方式打开：';
+    }
   }
 
   /** 画"最近使用"的背景（最多 5 个，含自定义图片；空格子也画出来，网格才稳）。 */
@@ -1884,6 +1908,13 @@
       event.target.value = '';
     });
 
+    // 选好文件夹：把它整理成左侧的文件树（readFolder 在下面）
+    $('folder-input').addEventListener('change', (event) => {
+      const input = event.target;
+      readFolder(input.files);
+      input.value = '';   // 清空，同一个文件夹再选一次也会触发 change
+    });
+
     const input = $('search-input');
     let searchTimer = 0;
     input.addEventListener('input', () => {
@@ -2009,10 +2040,8 @@
       } catch {
         toast('读不到文件列表');
       }
-    } else if (typeof window.showDirectoryPicker !== 'function') {
-      // 静态模式且浏览器不支持读文件夹：把"打开文件夹"按钮收起来，避免点了没反应
-      $('btn-open-folder').hidden = true;
     }
+    // 静态模式不用做额外处理："打开文件夹"现在靠 <input webkitdirectory>，任何浏览器都能用
 
     applyEmptyState();
 

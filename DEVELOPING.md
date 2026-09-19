@@ -54,7 +54,7 @@
 
 第 1、2 档的模糊是**下限**（默认 14px，`--btn-glass-blur`）：低于 8px 玻璃感会消失、字也容易糊。浏览器不支持 `backdrop-filter` 时，这几档退回 dsh 原本那种"实心但干净"的底色，可读性优先；第 0 档本来就是透明的，不受影响。所有数值（含深色主题那几个）都在 `styles/tuning.css`，出厂值在 `styles/reader.css`——**删掉 tuning.css 里的一行就回到出厂值**。
 
-## 五个踩过的坑（都写成了注释 + 断言）
+## 七个踩过的坑（都写成了注释 + 断言）
 
 **1. 通用类名会撞车。** 「最近使用」里的空格子原本叫 `.recent.empty`，而 `.empty` 是**空状态那个大面板**的类名（上面挂着 `max-width: 760px`、`margin: 5vh auto 0`、`padding: 46px 44px 34px`、`border-radius: 24px`）。于是占位格子被撑开、又被 5vh 的外边距顶到下一行——看上去就是"背景和占位边框不在同一行"。现在叫 `.recent.slot`（见 `styles/controls.css`），smoke 里加了 `slot.matches('.empty') === false` 这条断言防复发。**教训：面板级的类名要够特别，别用 `.empty`、`.box` 这种。**
 
@@ -65,6 +65,10 @@
 **4. 用正则改别人的压缩 CSS，边界字符必须写全。** 打包单文件版时要把 KaTeX 的字体换成 data URL，原来的写法是 `/src:\s*([^;]+);/g`——它要求 `src` 列表后面有个分号。可 KaTeX 的 `src` 是整条 `@font-face` 的**最后一项、没有分号**，于是匹配一路吃进了右花括号和下一条规则的 `@font-face{font-display:block;`：**20 条字体规则塌成 2 条**。症状很迷惑——**开发页公式完全正常，只有打包出来的那个文件里公式用回退字体、排版不对**（实测：开发页行内公式 46×22、字体 `check=true`；坏掉的打包版 42×21、四个 KaTeX 字体全是 `check=false / A network error`）。修法是让列表停在分号**或右花括号**上（`[^;}]+`，分号本身可选），并且在构建时就断言"@font-face 条数不能变、不能残留 url(fonts/…)"，smoke 的单文件模式里也加了同样的检查。**教训：改写别人生成的 CSS 时，先看清每条规则的结尾长什么样；再用一个"结构没变"的断言把它钉住。**
 
 **5. 给浏览器原生控件设 `width: 100%` 时，别忘了 UA 自带的外边距。** 滑杆（`input[type=range]`）在 Chrome 的 UA 样式里有 `margin: 2px`（给滑块腾地方）。写了 `width: 100%` 之后这两侧各 2px 就成了实打实的溢出：面板内容盒 290px、滑杆占 294px，于是那个窄面板里冒出一条横向滚动条（用户看到的就是"不知道为什么左右也能滚"）。修法是 `margin: 0`——滑块本来就画在输入框内部，不需要这两边。面板里另外两处也一并收拾了：`overflow-x: hidden` 兜底、去掉 `scrollbar-gutter: stable`（它常驻占掉约 10px，同样会把内容挤出去）。**教训：窄容器里的横向滚动条，基本都是某个子元素比容器宽几个像素——去找它，别用 `overflow: hidden` 糊过去。**
+
+**6. `void someAsyncFn()` 会把整条链路的异常吞掉。** 「打开文件夹」曾经是 `void openDirectory()`：用户点完、选完文件夹，只要后面任何一步抛错（权限、坏条目、遍历中途被删），就成了一个没人处理的 Promise 拒绝——**页面上一点动静都没有**，用户报的是「没反应」，而这句话几乎无法定位。现在整段 `try/catch` 兜住并把错误名说出来（`NotAllowedError` 这种就是权限），遍历的每一层也各自兜住并计数（一层读不动只跳过那一层，最后提示「有 N 处读不到，已跳过」），另外大目录会先弹一句「正在读…」、文件数封顶 3000。`tools/folder-probe.html` 能把这四种情况都跑一遍：`?case=normal|partial|denied|nopicker`。**教训：`void` 一个异步函数之前，先给它一个「一定会说话」的失败路径。**
+
+**7. `showDirectoryPicker()` 在 `file://` 页面上会卡住。** 「打开文件夹」原本用的是 File System Access：`typeof window.showDirectoryPicker === 'function'`（`file://` 下确实存在）、`isSecureContext === true`、页面也没有任何报错——可用户选完文件夹之后**连第一句提示都没出现**。原因是这个 promise 在 `file://` 源上不落地：系统对话框弹得出来、用户也能选，但 `await` 之后那行代码永远不执行，整条链路静默卡死。（把 `showDirectoryPicker` 换成假句柄时一切正常，正是这一点把嫌疑指向真实 API，而不是我们自己的代码。）现在改用 `<input type="file" webkitdirectory multiple>`：浏览器直接把整个目录（含子目录）的文件交给页面，Chrome / Edge / Firefox / Safari 都支持，`file://` 也照常，而且拿到的是 File 对象，读正文与图片都更直接。**教训：能在 `file://` 下用的能力，才是「双击就能用」的本机工具能用的能力；用系统对话框类 API 之前，先在最苛刻的那种打开方式里验一遍。**
 
 ## 设置为什么放在那里
 
@@ -125,6 +129,7 @@ md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Ob
     ├── smoke.mjs             用 jsdom 把整个应用跑一遍
     ├── measure.html          量算页：打印各按钮在浅/深色下的最终颜色
     ├── math-probe.html       量公式：字体加载没有、几何尺寸对不对（?src= 指定量哪一页）
+    ├── folder-probe.html     量"打开文件夹"：直接喂一批假 File，跑完打印树/提示/文案
     ├── pixel-probe.html      像素探针页：给截图量像素用
     └── pixels.mjs            真截图量像素：背景透不透、凸感在不在、切换看不看得出
 ```
@@ -158,6 +163,24 @@ READER_URL=http://127.0.0.1:4322 node tools/pixels.mjs     # 想量你正在用�
 ```sh
 chrome --headless=new --dump-dom "http://127.0.0.1:4321/tools/math-probe.html?src=/markdown-observer.html"
 ```
+
+「打开文件夹」会弹系统对话框，无头浏览器点不了。`tools/folder-probe.html` 的做法是**直接把一批带 `webkitRelativePath` 的 File 喂给 `#folder-input` 并触发 `change`**——这正是用户真的选完一个文件夹之后，浏览器交给页面的东西。然后打印根目录名、树行数、提示文字、中间那段说明。场景用 `?case=normal|empty|huge` 选（正常两层目录 / 一个 md 都没有 / 超过 3000 篇上限），`?src=` 指定测哪一页（`../index.html` 是开发页，`markdown-observer.html` 是打包版）。
+
+最省事的跑法是直接用阅读器自己的服务（开发页会自动进服务模式，但探针测的是 iframe 里的页面，不影响）：
+
+```sh
+./start.sh . --no-open &
+chrome --headless=new --dump-dom "http://127.0.0.1:4321/tools/folder-probe.html?src=../index.html&case=normal"
+```
+
+要连"双击文件"那种场景一起验（静态模式、`file://`），Windows 侧 Chrome 可以这样直接读 WSL 里的文件：
+
+```sh
+chrome --headless=new --allow-file-access-from-files --dump-dom \
+  "file://wsl.localhost/Ubuntu/home/<你>/.../md-reader/tools/folder-probe.html?src=../index.html&case=normal"
+```
+
+（`--allow-file-access-from-files` 只是让那个探针页能读同源的 iframe；阅读器本身不需要它。）
 
 `tools/measure.html` 是配套的量算页，用 `chrome --headless=new --dump-dom` 打开它就能把每个按钮在浅色/深色下的最终颜色、边框、磨砂、设置弹层是否完整落在视口里（开在座位上方、不越界）、以及「最近使用」那一行是不是 5 个格子同一行同一高度打出来——纯几何和颜色的问题，人眼看不准，这个页面一跑就有数。
 
@@ -295,7 +318,7 @@ jobs:
 ## 已知限制
 
 - **"好不好看"这件事没有自动验收**：布局、动效、磨砂的观感由 `tools/pixels.mjs`（真截图量像素）和 `tools/measure.html`（真浏览器量最终颜色）覆盖到"数值对不对"，剩下的主观判断仍然需要人眼过一遍。
-- **「打开文件夹」只支持 Chromium 系**（Chrome / Edge）：这是浏览器的能力（File System Access API），Firefox / Safari 上点它会提示改用服务模式；其余功能不受影响。
+- **读文件夹用的是 `<input webkitdirectory>`，不是 File System Access**：前者到处都能用（含 `file://`），后者在 `file://` 页面上会卡住（见踩坑第 7 条）。代价是拿到的是「一批 File」而不是目录句柄：空目录不会出现在树里，文件夹里改了文件要重新选一次才会刷新。
 - **静态模式（拖入文件）下文档里的相对图片显示不了**：浏览器不允许 `file://` 页面读同目录文件。用服务模式或「打开文件夹」就正常。
 - **`file://` 下少数浏览器会禁用本地存储**：设置与阅读位置只在本次会话有效；服务模式下一定可用。
 - 不支持 **mermaid** 图（dsh 也不支持）。公式支持 `$...$`、`$$...$$`、`\(...\)`、`\[...\]`。

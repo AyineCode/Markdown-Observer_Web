@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>folder-probe</title>
+<style>
+  html,body{margin:0;padding:0;background:#fff}
+  #frame{display:block;width:1400px;height:900px;border:0}
+  #out{position:fixed;left:-9999px;top:0;white-space:pre}
+</style>
+</head><body>
+<iframe id="frame"></iframe><pre id="out">…</pre>
+<script>
+/*
+  量「打开文件夹」：不点系统对话框（无头浏览器里点不了），而是直接给 #folder-input
+  喂一批带 webkitRelativePath 的 File——这和用户真的选完一个文件夹之后浏览器给的东西是一样的。
+  用法：
+    folder-probe.html?src=../index.html&case=normal     测开发页
+    folder-probe.html?src=markdown-observer.html&case=empty
+  case：normal（两层目录）、empty（一个 md 都没有）、huge（超过上限）
+  注意：跨 file:// 页面读 iframe 需要 --allow-file-access-from-files（只影响这个探针，不影响阅读器）。
+*/
+const log = [];
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const frame = document.getElementById('frame');
+const query = new URLSearchParams(location.search);
+frame.src = query.get('src') || '/';
+const scenario = query.get('case') || 'normal';
+log.push('测的页面 = ' + frame.src);
+
+frame.addEventListener('load', async () => {
+  const doc = frame.contentDocument;
+  const win = frame.contentWindow;
+  await wait(500);
+
+  const makeFile = (rel, text) => {
+    const file = new win.File([text], rel.split('/').pop(), { type: 'text/markdown' });
+    Object.defineProperty(file, 'webkitRelativePath', { value: 'notes/' + rel });
+    return file;
+  };
+  let files = [];
+  if (scenario === 'normal') files = [makeFile('a.md', '# A\n'), makeFile('sub/b.md', '# B\n'), makeFile('sub/deep/c.md', '# C\n')];
+  else if (scenario === 'empty') files = [makeFile('readme.txt', 'x'), makeFile('sub/notes.doc', 'x')];   // 有文件，但一个 md/txt 都没有
+  else if (scenario === 'huge') files = Array.from({ length: 3100 }, (_, i) => makeFile('f' + i + '.md', '# ' + i));
+
+  const input = doc.getElementById('folder-input');
+  log.push('场景=' + scenario + '  喂进去的文件数=' + files.length + '  （input 存在=' + (input !== null) + '）');
+  Object.defineProperty(input, 'files', { value: files, configurable: true });
+  input.dispatchEvent(new win.Event('change', { bubbles: true }));
+  await wait(600);
+
+  const tree = doc.getElementById('file-tree');
+  log.push('  root-name = ' + JSON.stringify(doc.getElementById('root-name').textContent) + '  root-line 隐藏 = ' + doc.getElementById('root-line').hidden);
+  log.push('  树行数 = ' + tree.querySelectorAll('.tree-row').length + '（文件 ' + tree.querySelectorAll('.tree-row.file').length + '，目录 ' + tree.querySelectorAll('.tree-row.dir').length + '）');
+  log.push('  提示 = ' + JSON.stringify(doc.getElementById('toast').textContent));
+  log.push('  中间说明 = ' + JSON.stringify(doc.getElementById('empty-sub').textContent));
+  document.getElementById('out').textContent = JSON.stringify(log);   // 单行输出，外面用 sed 一抓就完事
+});
+</script></body></html>

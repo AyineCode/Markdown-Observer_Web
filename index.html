@@ -62,7 +62,7 @@
         <div class="root-line" id="root-line" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>
           <span class="root-name" id="root-name"></span>
-          <button class="icon-btn tiny" id="btn-open-folder" type="button" title="打开文件夹（Chrome/Edge 原生能力；服务模式下由启动参数决定根目录）" aria-label="打开文件夹">
+          <button class="icon-btn tiny" id="btn-open-folder" type="button" title="打开文件夹（服务模式下根目录由启动参数决定）" aria-label="打开文件夹">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
           </button>
         </div>
@@ -129,7 +129,7 @@
           </svg>
         </div>
         <h1>Markdown Observer</h1>
-        <p class="empty-sub">排版与 DeepSeek Harness 的聊天正文一致，字号、行距、背景都可以调。<br>把 .md 文件拖进窗口，或选一种方式打开：</p>
+        <p class="empty-sub" id="empty-sub">排版与 DeepSeek Harness 的聊天正文一致，字号、行距、背景都可以调。<br>把 .md 文件拖进窗口，或选一种方式打开：</p>
 
         <!-- 三张卡按当前环境显隐：服务模式藏"打开文件夹"，静态模式藏"从左侧选择" -->
         <div class="empty-cards">
@@ -149,7 +149,7 @@
             </span>
             <span class="card-text">
               <span class="card-title">打开文件夹</span>
-              <span class="card-note">读一整个目录 · Chrome / Edge</span>
+              <span class="card-note">读一整个目录（含子目录），任何浏览器都行</span>
             </span>
           </button>
 
@@ -264,6 +264,11 @@
   <div class="drop-hint" id="drop-hint">松手即可打开这个 Markdown 文件</div>
 
   <input type="file" id="file-input" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown" hidden multiple>
+  <!-- 选文件夹用它：webkitdirectory 让浏览器把整个目录（含子目录）的文件交给我们。
+       不用 File System Access 的 showDirectoryPicker：它只在安全上下文可用，
+       而且在 file:// 打开的页面上会卡住——对话框弹得出来，promise 却一直不落地，
+       表现就是「选完文件夹什么都没发生」。webkitdirectory 哪都能用，读到的还是 File 对象。 -->
+  <input type="file" id="folder-input" webkitdirectory multiple hidden>
 
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/highlight.min.js"></script>

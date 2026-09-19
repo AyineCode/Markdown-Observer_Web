@@ -62,31 +62,19 @@ if (useServer) {
   }
 }
 
-/** 造一个假的目录句柄，模拟浏览器"打开文件夹"返回的东西。 */
-function fakeDirectory(window, spec, name) {
-  const entries = [];
-  for (const [key, value] of Object.entries(spec)) {
-    if (typeof value === 'string') {
-      entries.push({
-        name: key,
-        kind: 'file',
-        async getFile() { return new window.File([value], key, { type: 'text/markdown' }) },
-      });
-    } else {
-      entries.push(fakeDirectory(window, value, key));
-    }
-  }
-  return {
-    name,
-    kind: 'directory',
-    values() {
-      let i = 0;
-      return {
-        async next() { return i < entries.length ? { value: entries[i++], done: false } : { value: undefined, done: true } },
-        [Symbol.asyncIterator]() { return this },
-      };
-    },
-  };
+/**
+ * 模拟浏览器"选了一个文件夹"：造一批带 webkitRelativePath 的 File，
+ * 直接喂给 #folder-input（应用现在靠 <input webkitdirectory>，不再用 File System Access）。
+ * @param {object} window jsdom 的 window
+ * @param {Record<string, string>} spec 形如 { 'a.md': '正文', 'sub/b.md': '正文' }（相对选中的文件夹）
+ * @param {string} root 选中的文件夹名
+ */
+function fakeFolderFiles(window, spec, root) {
+  return Object.entries(spec).map(([rel, text]) => {
+    const file = new window.File([text], rel.split('/').pop(), { type: 'text/markdown' });
+    Object.defineProperty(file, 'webkitRelativePath', { value: root + '/' + rel });
+    return file;
+  });
 }
 
 const options = {
@@ -102,11 +90,11 @@ const options = {
       const res = await fetch(url, init);
       return { ok: res.ok, status: res.status, json: () => res.json(), text: () => res.text() };
     };
-    // jsdom 也没有 File System Access：用一个假目录模拟（只在静态模式下用）
+    // jsdom 里没有"选文件夹"这回事：静态模式下把假文件列表挂在 window 上，测试里再喂给 #folder-input
     if (!useServer) {
-      window.showDirectoryPicker = async () => fakeDirectory(window, {
+      window.__FAKE_FOLDER__ = fakeFolderFiles(window, {
         'a.md': '# 文档 A\n\n第一份文档。\n\n## 小节一\n\n内容。\n',
-        'sub': { 'b.md': '# 文档 B\n\n第二份文档。\n\n## 小节二\n\n内容。\n' },
+        'sub/b.md': '# 文档 B\n\n第二份文档。\n\n## 小节二\n\n内容。\n',
       }, 'notes');
     }
   },
@@ -378,11 +366,18 @@ if (useServer) {
   await sleep(150);
   check('Alt+] 切到下一个', id('doc-title').textContent !== firstTitle, true);
 } else {
-  // 静态模式：用假的目录句柄模拟浏览器的"打开文件夹"
+  // 静态模式：模拟浏览器的"选了一个文件夹"——点按钮 → 给 #folder-input 喂一批 File → 触发 change
   id('btn-open-folder').click();
+  const folderInput = id('folder-input');
+  Object.defineProperty(folderInput, 'files', { value: window.__FAKE_FOLDER__, configurable: true });
+  folderInput.dispatchEvent(new window.Event('change', { bubbles: true }));
   await sleep(300);
   check('根目录显示出来了', id('root-name').textContent, 'notes');
   check('选过文件夹后，空状态改推荐"从左侧选择"', id('card-browse').hidden, false);
+  // 「选完文件夹什么都没发生」曾经是真实反馈：中间那段说明必须改口，别让人以为没反应
+  check('中间说明改口成"去左边挑一篇"', id('empty-sub').textContent.includes('左侧已经列出'), true);
+  // 假目录里是 a.md 和 sub/b.md，一共 2 篇（示例文档不算在里面）
+  check('底部提示报出找到几篇', id('toast').textContent.includes('找到 2 个 markdown 文件'), true);
   check('折叠时只显示顶层文件', id('file-tree').querySelectorAll('.tree-row.file').length, 1);
   check('有一个可折叠目录', id('file-tree').querySelectorAll('.tree-row.dir').length, 1);
   id('file-tree').querySelector('.tree-row.file').click();
