@@ -12,6 +12,7 @@
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const CHECKOUT = process.env.DSH_CHECKOUT ?? fileURLToPath(new URL('../../deepseek-harness-ayine/', import.meta.url));
@@ -134,6 +135,13 @@ if (useStandalone) {
   check('没有任何外部脚本引用', document.querySelectorAll('script[src]').length, 0);
   check('样式已内联', document.querySelectorAll('style').length >= 5, true);
   check('公式字体已内联', document.documentElement.innerHTML.includes('data:font/woff2'), true);
+  // 回归防线：内联字体时曾经把 src 列表一路吃到右花括号，20 条 @font-face 塌成 2 条，
+  // 结果"开发页公式正常、打包出来用回退字体"。条数必须与源文件一致，且不能再引用外部字体。
+  const builtCss = readFileSync(join(APP, 'markdown-observer.html'), 'utf8');
+  const sourceK = readFileSync(join(APP, 'vendor', 'katex.min.css'), 'utf8');
+  check('打包后 @font-face 条数不少于源文件（现在 ' + (builtCss.match(/@font-face/g) ?? []).length + ' vs ' + (sourceK.match(/@font-face/g) ?? []).length + '）',
+    (builtCss.match(/@font-face/g) ?? []).length >= (sourceK.match(/@font-face/g) ?? []).length, true);
+  check('打包后不再引用外部字体文件', (builtCss.match(/url\(\s*['"]?fonts\//g) ?? []).length, 0);
 }
 check('marked', typeof window.marked, 'object');
 check('hljs', typeof window.hljs, 'object');

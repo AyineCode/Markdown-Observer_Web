@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>math-probe</title>
+<style>html,body{margin:0;padding:0;background:#fff}#frame{display:block;width:1400px;height:900px;border:0}#out{position:fixed;left:-9999px;top:0;white-space:pre}</style>
+</head><body>
+<iframe id="frame"></iframe><pre id="out">…</pre>
+<script>
+/* 只干一件事：把这篇示例文档里的公式"量"出来——DOM 数量、字号、字体是否真的加载、几何尺寸。 */
+const log = [];
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// ?src= 指定要量的页面：默认是开发用的 /，也可以指到打包出来的那一个
+const src = new URLSearchParams(location.search).get('src') || '/';
+document.getElementById('frame').src = src;
+log.push('量的页面：' + src);
+const box = (el) => { const r = el.getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height); };
+document.getElementById('frame').addEventListener('load', async () => {
+  const doc = document.getElementById('frame').contentDocument;
+  const win = document.getElementById('frame').window || document.getElementById('frame').contentWindow;
+  await wait(500);
+  doc.getElementById('btn-sample').click();          // 打开示例文档
+  await wait(800);
+  const content = doc.getElementById('content') || doc.querySelector('.markdown');
+  log.push('内容容器 = ' + (content === null ? '找不到' : (content.id || content.className)));
+  log.push('行内公式 .katex 个数 = ' + doc.querySelectorAll('.katex').length);
+  log.push('独立公式 .katex-display 个数 = ' + doc.querySelectorAll('.katex-display').length);
+  const inline = doc.querySelector('.katex');
+  if (inline !== null) {
+    const cs = win.getComputedStyle(inline);
+    log.push('第一个 .katex： 字号=' + cs.fontSize + ' 行高=' + cs.lineHeight + ' 字体=' + cs.fontFamily.slice(0, 60));
+    log.push('   几何 ' + box(inline) + '  innerHTML 长度=' + inline.innerHTML.length);
+    log.push('   innerHTML 开头：' + inline.innerHTML.slice(0, 120));
+    const parent = inline.parentElement;
+    log.push('   父元素 <' + parent.tagName.toLowerCase() + '> 字号=' + win.getComputedStyle(parent).fontSize);
+  }
+  const display = doc.querySelector('.katex-display');
+  if (display !== null) {
+    const cs = win.getComputedStyle(display);
+    log.push('第一个 .katex-display： 几何 ' + box(display) + ' 字号=' + cs.fontSize + ' margin=' + cs.marginTop + '/' + cs.marginBottom + ' textAlign=' + cs.textAlign + ' overflow=' + cs.overflowX);
+  }
+  // 字体到底加载了没有：KaTeX 全靠这几个字体，缺了就只能用回退字体，"看着不太对"
+  const names = ['KaTeX_Main', 'KaTeX_Math', 'KaTeX_Size1', 'KaTeX_AMS'];
+  for (const name of names) {
+    let state = '未知';
+    try {
+      const loaded = await win.document.fonts.load('1em ' + name);
+      state = loaded.length > 0 ? '已加载(' + loaded.length + ')' : '加载返回空';
+    } catch (e) { state = '异常：' + e.message }
+    log.push('字体 ' + name.padEnd(12) + ' check=' + win.document.fonts.check('1em ' + name) + '  ' + state);
+  }
+  log.push('document.fonts.size = ' + win.document.fonts.size);
+  document.getElementById('out').textContent = log.join('\n');
+});
+</script></body></html>

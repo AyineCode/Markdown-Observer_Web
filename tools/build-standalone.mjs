@@ -26,11 +26,17 @@ const read = (rel) => readFileSync(join(APP, rel), 'utf8')
  * 这里按整个 src 声明来重建，而不是逐个替换 url()：KaTeX 每个字体会写三条回退
  * （woff2 / woff / ttf），我们只随包提供 woff2，所以要连 format(...) 一起丢掉，
  * 否则单文件版会为不存在的字体发请求，还会留下悬空的逗号。
+ *
+ * ⚠️ 两个字符都不能少：src 列表要用 `[^;}]+ `停在分号**或右花括号**上。
+ * KaTeX 里 src 就是整条规则的最后一项、后面没有分号，只用 `[^;]+` 会一路吃进
+ * 右花括号和**下一条 @font-face 的开头**，结果是 20 条字体规则塌成 2 条、
+ * 公式只好用回退字体——"开发页好好的、打包出来不对"就是这么来的。
  * @param {string} css katex.min.css 的内容
  * @returns {string} 字体已内联的 CSS
  */
 function inlineKatexFonts(css) {
-  return css.replace(/src:\s*([^;]+);/g, (whole, list) => {
+  const before = (css.match(/@font-face/g) ?? []).length;
+  const out = css.replace(/src:\s*([^;}]+)(;?)/g, (whole, list, semicolon) => {
     const kept = [];
     for (const entry of list.split(',')) {
       const match = /url\(\s*(['"]?)fonts\/([^'")]+)\1\s*\)(\s*format\([^)]*\))?/.exec(entry);
@@ -44,8 +50,15 @@ function inlineKatexFonts(css) {
         // 这个格式的文件没随包提供：整条丢掉（浏览器会用剩下的那条）
       }
     }
-    return 'src: ' + kept.join(', ') + ';';
+    return 'src: ' + kept.join(', ') + semicolon;
   });
+  // 构建期就把话说死：字体规则的条数不能变、里面不能再引用外部字体文件
+  const after = (out.match(/@font-face/g) ?? []).length;
+  const external = (out.match(/url\(\s*['"]?fonts\//g) ?? []).length;
+  if (after !== before || external !== 0) {
+    throw new Error('内联字体时破坏了 CSS：@font-face ' + before + ' → ' + after + '，仍有 ' + external + ' 处引用外部字体');
+  }
+  return out;
 }
 
 /**
