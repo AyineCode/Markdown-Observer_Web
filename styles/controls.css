@@ -112,17 +112,70 @@
 
 /* ─────────────────────────── 设置面板（popover） ─────────────────────────── */
 
+/*
+   设置面板：**固定高度 + 内部纵向滚动**。
+   为什么不用"内容多高就多高"：排版页和背景页一长一短，切页签时面板会突然长高，
+   而 JS 是打开那一刻量着高度把它摆在入口上方的——切完页签就压出屏幕了（实测背景页
+   比排版页高 170px，底边会跑到视口外）。固定高度之后：切页签不动、位置永远有效，
+   内容真要放不下时在面板内部滚，不影响页面其它部分。
+   高度由 --pop-h 定（styles/tuning.css），再用视口高度兜住，免得小窗口里装不下：
+   上面留给它的空间 = 视口 − 座位(14+38) − 间隙(8) − 上边距(16) ≈ 100vh − 76px。 */
 .popover {
   position: fixed;
   z-index: 70;
+  display: flex;
+  flex-direction: column;
   width: 320px;
-  max-height: min(78vh, 720px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  height: min(var(--pop-h, 546px), calc(100vh - 76px));
+  overflow: hidden;
   padding: 14px;
   border-radius: var(--pop-radius, 16px);
   transform-origin: top right;
   animation: pop-in 160ms var(--ease);
+}
+
+/* 页签固定在顶部，不参与滚动 */
+.pop-tabs {
+  flex: none;
+}
+
+/*
+   当前这一页占满剩下的高度，超出就在面板内部滚，但**不画滚动条**（太窄的面板里那根条很扎眼）。
+   两个细节：
+     · 不用 scrollbar-gutter: stable —— 它会常驻占掉约 10px，把内容盒挤窄，
+       里面本来就贴着边的那些行（输入框那一行、色板网格）就会被挤出去 4px，
+       于是面板里出现了莫名其妙的横向滚动条；
+     · overflow-x 明确写 hidden：纵向 auto 时横向本来会算成 auto，一旦有谁宽出 1px
+       就冒出一条横条。上面已经保证不溢出，这里是兜底，不让它变成可见的毛病。
+   滚动条隐藏后仍可用：滚轮、触控板、键盘（Tab / PageUp / PageDown）、拖动都不会受影响。 */
+.pop-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;          /* Firefox */
+}
+
+.pop-pane::-webkit-scrollbar {    /* Chrome / Edge / Safari：不画滚动条，但仍可滚 */
+  display: none;
+}
+
+/*
+   底部渐隐：还有内容没露出来时，让内容在面板下缘"化开"，滚到底自动消失。
+   显隐由 JS 判断（syncPopScroll：scrollTop + clientHeight < scrollHeight），
+   因为它要同时看"内容够不够长"和"是不是已经滚到底"——纯 CSS 很难两条都判准。
+
+   为什么用 mask 而不是盖一层渐变：
+   一开始是在面板下缘盖一条渐变色带，但面板是半透明的（fill 是 rgb(--glass-rgb / --glass-alpha)），
+   那条带子只要比面板本身更实（0.92 对 0.5），看上去就是**一根不透明的条**，边界清清楚楚；
+   换成 mask 之后是**内容自己**渐隐到透明，露出来的是面板本身，没有第二个颜色要匹配，也就没有接缝。
+   mask 贴在 .pop-pane 的边框盒上，而滚动发生在盒内部，所以它永远钉在面板下缘、不跟着内容跑。 */
+.popover[data-more='true'] .pop-pane {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--pop-fade-h, 22px)), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--pop-fade-h, 22px)), transparent);
 }
 
 @keyframes pop-in {
@@ -190,6 +243,10 @@
   appearance: none;
   width: 100%;
   height: 22px;
+  /* 浏览器的 UA 样式给 range 留了 margin: 2px（给滑块腾地方）。设了 width: 100% 之后
+     这两侧的 2px 就成了实打实的溢出：面板内容盒 290px，滑杆却占 294px，
+     于是窄面板里冒出一条横向滚动条。滑块本来就在输入框内部画，不需要这两边。 */
+  margin: 0;
   background: transparent;
   cursor: pointer;
 }
@@ -680,7 +737,10 @@ body[data-sidebar='open'] .scrim.visible {
   margin-top: 2px;
 }
 
+/* 说明文字钉在面板底部：内容不满时那是一块刻意的留白，而不是没画完 */
 .pop-note {
+  margin-top: auto;
+  padding-top: 12px;
   margin: 12px 0 0;
   font-size: 11px;
   line-height: 17px;

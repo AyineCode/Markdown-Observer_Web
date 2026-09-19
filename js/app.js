@@ -114,7 +114,7 @@
     bgMode: 'none',       // none（极简的黑白渐变）| preset（内置渐变）| image（自己的图）
     bgPreset: 'aurora',   // 选 preset 时才用得上：见下面 PRESETS 的第一项
     bgImageKey: null,     // 当前自定义背景在 IndexedDB 里的键
-    bgBlur: 22,
+    bgBlur: 6,
     bgDim: 0.3,
     glassAlpha: 0.5,      // 面板不透明度（越透，背景的颜色越能透到按钮上）
     recents: [],          // 最近用过的背景：[{ kind: 'preset', id } | { kind: 'image', key }]
@@ -325,6 +325,7 @@
 
     renderSwatches();
     renderRecents();
+    syncPopScroll();   // 色板/最近使用重画后高度会变，底部渐隐跟着重算
   }
 
   /** 画背景预设色板（含"无背景"和"自定义图片"两块）。 */
@@ -1694,6 +1695,7 @@
     $('pop-type').hidden = name !== 'type';
     $('pop-bg').hidden = name !== 'bg';
     $$('[data-ptab]').forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.ptab === name)));
+    if ($('popover').hidden === false) { placePopover(); syncPopScroll() }   // 换页签后重摆位置；两页长短不同，渐隐提示也要重算
   }
 
   /**
@@ -1776,12 +1778,14 @@
     }
   }
   /**
-   * 打开设置面板，并把它摆在入口旁边：默认在按钮下方、左边缘对齐；
-   * 下方放不下就翻到按钮上方（入口在左下角，所以这条分支是常态）。
+   * 把设置面板摆在入口旁边：默认在按钮下方、左边缘对齐；下方放不下就翻到按钮上方
+   * （入口在左下角，所以这条分支是常态）。
+   *
+   * 面板高度是固定的（见 .popover 的 height），所以量一次就够；切页签时再摆一次，
+   * 万一以后某个页签的内容改了高度，位置也不会错。
    */
-  function openPopover() {
+  function placePopover() {
     const pop = $('popover');
-    pop.hidden = false;
     const rect = $('btn-settings').getBoundingClientRect();
     const width = pop.offsetWidth;
     const height = pop.offsetHeight;
@@ -1789,6 +1793,25 @@
     const top = below + height > window.innerHeight - 8 ? Math.max(8, rect.top - height - 8) : below;
     pop.style.top = Math.round(top) + 'px';
     pop.style.left = Math.round(Math.max(12, Math.min(window.innerWidth - width - 12, rect.left))) + 'px';
+  }
+
+  /**
+   * 设置面板底部那条渐隐：只有当"当前这一页还能往下滚"时才出现。
+   * 两个条件都要看——内容够不够长（clientHeight < scrollHeight），以及是不是已经滚到底
+   * （scrollTop + clientHeight < scrollHeight）。滚到底就收起来，免得让人以为下面还有。
+   */
+  function syncPopScroll() {
+    const pop = $('popover');
+    const pane = pop.querySelector('.pop-pane:not([hidden])');
+    if (pane === null) { pop.dataset.more = 'false'; return }
+    pop.dataset.more = pane.scrollTop + pane.clientHeight < pane.scrollHeight - 1 ? 'true' : 'false';
+  }
+
+  /** 打开设置面板（先显示再摆位置：要量到真实尺寸）。 */
+  function openPopover() {
+    $('popover').hidden = false;
+    placePopover();
+    syncPopScroll();
   }
 
   function openSample() {
@@ -1847,6 +1870,10 @@
 
     // 设置面板的三个分段
     $$('[data-ptab]').forEach((btn) => btn.addEventListener('click', () => setSettingsTab(btn.dataset.ptab)));
+
+    // 面板内滚动时重算底部渐隐（滚到底就收起来）；窗口尺寸变了也跟着重算
+    $$('.pop-pane').forEach((pane) => pane.addEventListener('scroll', syncPopScroll, { passive: true }));
+    window.addEventListener('resize', () => { if ($('popover').hidden === false) { placePopover(); syncPopScroll() } });
 
     // 数值项：滑杆 + 数字框
     for (const field of FIELDS) bindField(field);

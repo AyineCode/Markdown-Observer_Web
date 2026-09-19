@@ -84,6 +84,32 @@ frame.addEventListener('load', async () => {
   log('设置弹层  left=' + Math.round(box.left) + '（座位 left=' + Math.round(seat.left) + '）  bottom=' + Math.round(box.bottom) + '（座位 top=' + Math.round(seat.top) + '）  视口=' + win.innerWidth + 'x' + win.innerHeight);
   log('设置弹层  完整在视口内=' + (inside ? 'yes' : 'no') + '  开在座位上方=' + (above ? 'yes' : 'no'));
 
+  // 设置面板：固定高度 + 内部纵向滚动——切页签高度不该变，也不该越出视口
+  const panelH = () => Math.round(doc.getElementById('popover').getBoundingClientRect().height);
+  const typeH = panelH();
+  doc.querySelector('[data-ptab="bg"]').click();
+  await wait(220);
+  const bgH = panelH();
+  const activePane = doc.querySelector('.pop-pane:not([hidden])');
+  const paneStyle = win.getComputedStyle(activePane);
+  const panelRect = doc.getElementById('popover').getBoundingClientRect();
+  log('设置面板  排版高=' + typeH + '  背景高=' + bgH + '  高度固定=' + (Math.abs(typeH - bgH) <= 1 ? 'yes' : 'no（错了）')
+    + '  越界=' + (panelRect.top < 0 || panelRect.bottom > win.innerHeight ? 'yes（错了）' : 'no')
+    + '  横向=' + activePane.scrollWidth + '/' + activePane.clientWidth + (activePane.scrollWidth > activePane.clientWidth ? '（溢出，错了）' : '（不溢出）')
+    + '  纵向内容=' + activePane.scrollHeight + '/' + activePane.clientHeight + '  可滚动=' + paneStyle.overflowY);
+  // 底部渐隐：背景页能滚时应出现（data-more=true），滚到底时应收起
+  const scrollPane = doc.querySelector('.pop-pane:not([hidden])');
+  const fadeOn = pop.dataset.more === 'true' && win.getComputedStyle(pop, '::after').opacity !== '0';
+  scrollPane.scrollTop = scrollPane.scrollHeight;
+  scrollPane.dispatchEvent(new win.Event('scroll'));
+  await wait(200);
+  const fadeOffAtBottom = pop.dataset.more === 'false';
+  log('底部渐隐  能滚时出现=' + (fadeOn ? 'yes' : 'no（错了）') + '  滚到底收起=' + (fadeOffAtBottom ? 'yes' : 'no（错了）'));
+  scrollPane.scrollTop = 0;
+  scrollPane.dispatchEvent(new win.Event('scroll'));
+  doc.querySelector('[data-ptab="type"]').click();
+  await wait(180);
+
   // "最近使用"那一行：换一次背景后，5 个格子必须在同一行、等宽、边距一致
   const swatches = doc.querySelectorAll('#swatches .swatch');
   if (swatches.length > 1) swatches[1].click();
