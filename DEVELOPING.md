@@ -1,8 +1,17 @@
-# Markdown 阅读器 · 开发与维护
+# Markdown Observer · 开发与维护
 
 这份文档写给**要改它、验证它**的人。只想读文档的话看 [README.md](README.md)。
 
 ---
+
+## 命名：产品叫 Markdown Observer
+
+产品名、页面标题、构建产物、发布包都统一成 **Markdown Observer**（仓库同名）。两处**故意不动**：
+
+- **目录名还是 `md-reader/`**——它只是个路径，改它要动所有脚本里的相对路径和每个人的习惯，收益为零；
+- **存储键还是 `md-reader:settings:v4` 和 IndexedDB 里的 `md-reader`**——改键等于把所有人的设置、背景图、阅读位置全部丢掉。
+
+改名的只有"看得见的名字"：`index.html` 的标题与品牌、`serve.mjs` 的启动横幅、启动脚本里的提示、`sample.md` 的标题、构建产物 `markdown-observer.html`、发布包 `markdown-observer-v<版本>.zip`。
 
 ## 与 dsh 的保真度
 
@@ -86,23 +95,26 @@
 ## 目录结构
 
 ```
-md-reader/
+md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Observer（见下）
+├── .gitattributes      行尾规则：仓库里一律 LF，Windows 的 .bat 用 CRLF
+├── .gitignore          构建产物 / 运行期文件 / 系统杂物
+├── LICENSE             本项目 MIT（© 2026 AyineCode）
 ├── start.sh / stop.sh / start.command / start.bat / stop.bat   启动与停止
 ├── index.html          页面骨架（开发用；单文件版由它构建而来）
-├── markdown-reader.html  构建产物：单文件、可直接分发
+├── markdown-observer.html  构建产物：单文件、可直接分发
 ├── share/              给朋友的三件套（HTML + 说明 + 示例；构建产物）
 ├── serve.mjs           本地服务：静态文件 + 目录树 + 文件/图片读取（零依赖，只监听 127.0.0.1）
 ├── js/app.js           全部前端逻辑
-├── styles/             dsh 的五张 token 表 + markdown.css（逐条搬运）+ 阅读器自己的壳与控件
+├── styles/             dsh 的五张 token 表 + markdown.css（逐条搬运）+ 自己的壳与控件
 │                       ★ tuning.css：外观尺码都在这（改它一个文件就够）
-├── vendor/             第三方库（本地文件，见 NOTICE.md）
+├── vendor/             第三方库（本地文件，见 NOTICE.md）+ 各家的许可证原文
 ├── sample.md / sample.js  示例文档与其内嵌版本
 ├── README.md           用户手册（给读文档的人）
 ├── DEVELOPING.md       本文件
 └── tools/
     ├── build-standalone.mjs  构建单文件 HTML
     ├── build-share.mjs       生成 share/ 分享包
-    ├── release.mjs           打成 markdown-reader-v<版本>.zip（零依赖，自己写的 zip）
+    ├── release.mjs           打成 markdown-observer-v<版本>.zip（零依赖，自己写的 zip）
     ├── build-sample.mjs      由 sample.md 生成 sample.js
     ├── check-styles.mjs      保真度与 CSS 变量校验
     ├── smoke.mjs             用 jsdom 把整个应用跑一遍
@@ -157,32 +169,83 @@ READER_URL=http://127.0.0.1:4322 node tools/pixels.mjs     # 想量你正在用�
 
 ## 怎么发布
 
-两条命令产出"能直接发人"的东西：
+发布要解决的问题只有一个：**让"某个版本"有一个固定的下载地址**。这个仓库的分工是——
+
+| 东西 | 放在哪 | 为什么 |
+|---|---|---|
+| 源码 | 仓库（git） | 一切都能从这里重建 |
+| 能下载的成品（zip） | **GitHub Release 的附件** | 构建产物不进版本库；附件不占仓库体积，还能按版本回看"哪一版发给过谁" |
+| 单文件版 / `share/` / zip | 本地（`.gitignore` 挡着） | 一条命令就能重建，没必要进库 |
+
+**版本号只有一个来源：git tag**（`v1.0.0` → `1.0.0`）。不额外维护 `VERSION` 文件、也不写死在代码里——tag 本身就是"发布这件事"，工具去读它，就不会出现"包里写 1.0.0、tag 是 1.0.1"这种对不上的情况。
+
+### 一次发布
 
 ```sh
-node tools/build-share.mjs        # 生成 share/：单文件 HTML + 说明 + 示例
-node tools/release.mjs 1.0        # 打成 markdown-reader-v1.0.zip（约 460 KB）
-node tools/release.mjs            # 不写版本号就取最近的 git tag（v1.2 → 1.2），没有 tag 就用 1.0
+node tools/release.mjs          # 版本号取最近的 tag；也可以 node tools/release.mjs 1.0.1 指定
 ```
 
-zip 里是 `share/` 的三件套，**不套一层目录**：收件人解压后直接双击 `markdown-reader.html`。
+它会一条龙做完：**重建单文件版 → 重建 share/ → 打成 markdown-observer-v<版本>.zip → 打印"发布检查"和下一步**。zip 里是 `share/` 的三件套，**不套一层目录**，收件人解压后直接双击 `markdown-observer.html`。
 
-打包为什么自己写：Windows / WSL / macOS 上有没有 `zip` 命令全看运气（本机就没有）。Node 自带 zlib，把 zip 的那几十行写在 `tools/release.mjs` 里，就能保证"一条命令到处一样"；产物用 `python3 -m zipfile` 或任何解压软件验过（`testzip()` 无损坏、逐字节一致、deflate、权限 0644）。
+打包为什么自己写：Windows / WSL / macOS 上有没有 `zip` 命令全看运气（本机就没有）。Node 自带 zlib，把 zip 的那几十行写在 `tools/release.mjs` 里，就能保证"一条命令到处一样"；产物用 Python 的 `zipfile` 验过（`testzip()` 无损坏、逐字节一致、deflate、权限 0644）。
 
-`share/` 与 `markdown-reader-v*.zip` **都不入库**（见 `.gitignore`）：它们是构建产物，一条命令就能重建。
-
-**发给朋友**：把那个 zip 发过去就行（微信 / 邮件 / U 盘都可以），对方不需要装任何东西、也不需要联网。
-
-**挂到 GitHub Release**（想给一个"随时能下到最新版"的链接、或者留版本档时）：
+跑完它会列一张清单（工作区干净吗、tag 有没有、远程配了吗、包叫什么），并**把 Release 说明的模板直接打出来**——复制粘贴即可。接着：
 
 ```sh
-git tag v1.0 && git push origin v1.0
-gh release create v1.0 markdown-reader-v1.0.zip --title "v1.0" --notes "双击 markdown-reader.html 即可阅读"
+git add -A && git commit -m "..." && git push
+git tag -a v1.0.0 -m "Markdown Observer v1.0.0" && git push origin v1.0.0
 ```
 
-没装 `gh` 也行：网页上进仓库的 **Releases → Draft a new release**，选好 tag，把 zip 拖进 **Attach binaries** 即可。**附件不占仓库体积**，所以别把 zip 提交进仓库——这正是 `.gitignore` 挡着它的原因。
+然后网页上三下：仓库 → **Releases → Draft a new release** → 选 tag `v1.0.0` → 把 zip 拖进 **Attach binaries** → **Publish**。
 
-## 进阶用法
+> 别把 zip 提交进仓库。它 463 KB 且每次改样式都会变，进版本库只会让历史越来越重——附件才是它的家，这也是 `.gitignore` 挡着它的原因。
+
+**Release 说明写什么**：三段就够——① 这是什么；② 怎么用（下载哪个文件、双击哪个）；③ 这一版改了什么。前两段 `release.mjs` 已经生成好，第三段每次手写。
+
+### 装了 gh 之后（可选）
+
+没装也能发（网页三下就完事）；装了之后一条命令：
+
+```sh
+gh release create v1.0.0 markdown-observer-v1.0.0.zip --title "v1.0.0" --generate-notes
+```
+
+（`--generate-notes` 让 GitHub 按提交记录自动写说明；想自己写，就把上面 `release.mjs` 打印的那段存成 `RELEASE.md`，改用 `--notes-file RELEASE.md`。）
+
+### 全自动（可选，想省掉网页那三下）
+
+在仓库里放一个 `.github/workflows/release.yml`，"push 一个 tag"就自动构建并挂附件——因为打包零依赖（只用 Node 自带的 zlib），CI 里跑得起来：
+
+```yaml
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: node tools/build-share.mjs
+      - run: node tools/release.mjs --no-build
+      - run: gh release create "$GITHUB_REF_NAME" markdown-observer-*.zip --title "$GITHUB_REF_NAME" --generate-notes
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+```
+
+好处是"发布 = 推一个 tag"；代价是多一个要维护的 CI 文件、出问题得去 Actions 页面看日志。**自己发着玩的话，手工三步更直接。**
+
+### 发布前的检查清单
+
+1. 自测全绿：`node tools/check-styles.mjs`、三种 `smoke`、`node tools/pixels.mjs`（真浏览器量像素）；
+2. `node tools/release.mjs <版本>` 跑完，清单里的勾都对；
+3. 提交推送 → 打 tag 推送 → 建 Release（或网页那三下）；
+4. **自己下载一次**，解开双击 `markdown-observer.html` 确认能读——这是唯一能证明"发出去的那个东西是好的"的办法。
+
+
 
 **启动器参数**
 
@@ -200,7 +263,7 @@ gh release create v1.0 markdown-reader-v1.0.zip --title "v1.0" --notes "双击 m
 ./stop.sh              # 停掉它
 ```
 
-启动时会把自己的 PID、端口、文档目录写进 `.md-reader.pid`；`stop.sh` 读它来收工；Ctrl-C 结束也会自动清掉这个文件。所以**不会越起越多**：换个目录再启动，它会先停掉旧的那个。Windows 的 `start.bat` / `stop.bat` 是另一套（固定 4321 端口、`stop.bat` 按端口找进程），它们没入库，属于本机便利脚本。
+启动时会把自己的 PID、端口、文档目录写进 `.markdown-observer.pid`；`stop.sh` 读它来收工；Ctrl-C 结束也会自动清掉这个文件。所以**不会越起越多**：换个目录再启动，它会先停掉旧的那个。Windows 的 `start.bat` / `stop.bat` 是另一套（固定 4321 端口、`stop.bat` 按端口找进程），它们没入库，属于本机便利脚本。
 
 **服务接口**（服务模式下，插件/脚本也能用）
 

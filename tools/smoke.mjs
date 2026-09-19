@@ -111,7 +111,7 @@ const options = {
   },
 };
 
-const entry = useStandalone ? join(APP, 'markdown-reader.html') : join(APP, 'index.html');
+const entry = useStandalone ? join(APP, 'markdown-observer.html') : join(APP, 'index.html');
 const dom = useServer
   ? await JSDOM.fromURL('http://127.0.0.1:' + PORT + '/', options)
   : await JSDOM.fromFile(entry, options);

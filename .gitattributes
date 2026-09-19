@@ -1,0 +1,13 @@
+# 行尾统一：仓库里一律 LF；Windows 的批处理用 CRLF
+#   · cmd 对"只有 LF"的 .bat 支持不完整（goto / label 会出怪问题），所以 .bat 走 CRLF
+#   · shell 脚本必须是 LF：CRLF 会让 ./start.sh 报 "$'\r': command not found"
+* text=auto eol=lf
+*.bat text eol=crlf
+*.command text eol=lf
+*.sh text eol=lf
+
+# 二进制：不做行尾转换，也不试图 diff
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.zip binary

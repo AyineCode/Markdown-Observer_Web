@@ -1,4 +1,4 @@
-# Markdown 阅读器 · 示例文档
+# Markdown Observer · 示例文档
 
 这是一篇用来检查渲染效果的自测文档。下面出现的每一种元素，样式都与 DeepSeek Harness 聊天里的正文一致——因为样式表就是从那里搬过来的。
 

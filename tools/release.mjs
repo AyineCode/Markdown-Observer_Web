@@ -5,8 +5,8 @@
  * 为什么自己写 zip 而不是调用系统命令：Windows、WSL、macOS 上有没有 zip 命令全看运气
  * （本机就没有）。Node 自带 zlib，把 zip 的几十行写在代码里，就能保证"一条命令到处一样"。
  *
- * 产物：markdown-reader-v<版本>.zip，里面是 share/ 的三件套（相对路径，解压不套一层目录）：
- *   markdown-reader.html   阅读器本体，双击即用
+ * 产物：markdown-observer-v<版本>.zip，里面是 share/ 的三件套（相对路径，解压不套一层目录）：
+ *   markdown-observer.html   阅读器本体，双击即用
  *   HOW-TO-OPEN.txt        给收件人看的三行说明
  *   sample.md              一篇示例，收到就能试
  *
@@ -153,15 +153,58 @@ const entries = names.map((name) => {
   return { name, data: readFileSync(path), mtime: statSync(path).mtime };
 });
 
-const target = join(APP, 'markdown-reader-v' + version() + '.zip');
+const tag = 'v' + version();
+const target = join(APP, 'markdown-observer-' + tag + '.zip');
 const zip = makeZip(entries);
 writeFileSync(target, zip);
 
+/** 跑一条 git 命令；失败或没装 git 就返回 null。 */
+function git(args) {
+  try {
+    return execFileSync('git', args, { cwd: APP, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return null }
+}
+
+const dirty = git(['status', '--porcelain']);
+const hasTag = (git(['tag', '--list', tag]) ?? '') !== '';
+const remote = git(['remote', 'get-url', 'origin']);
+const kb = (bytes) => Math.round(bytes / 1024) + ' KB';
+
 console.log('打包完成：' + target);
-console.log('  版本：' + version() + '（' + Math.round(zip.length / 1024) + ' KB，压缩前 ' + Math.round(entries.reduce((sum, e) => sum + e.data.length, 0) / 1024) + ' KB）');
-for (const entry of entries) console.log('  包含：' + entry.name + '（' + Math.round(entry.data.length / 1024) + ' KB）');
+console.log('  版本：' + tag + '（' + kb(zip.length) + '，压缩前 ' + kb(entries.reduce((sum, e) => sum + e.data.length, 0)) + '）');
+for (const entry of entries) console.log('  包含：' + entry.name + '（' + kb(entry.data.length) + '）');
+
+/*
+  顺手把"发布还差什么"列出来：这些判断都是 git 问几句话就有答案的，
+  与其写在文档里让人自己对照，不如让工具直接说清现在走到哪一步。
+*/
 console.log('');
-console.log('怎么发：');
-console.log('  · 直接发人：把这个 zip 发过去，对方解压后双击 markdown-reader.html（Windows 自带解压，macOS 双击即可）');
-console.log('  · 挂到 GitHub Release：' + (existsSync('/usr/bin/gh') ? '' : '（本机没装 gh，可以网页上"Attach binaries"直接拖这个 zip）'));
-console.log('      gh release create v' + version() + ' "' + target + '" --title "v' + version() + '" --notes "Markdown 阅读器 v' + version() + '"');
+console.log('发布检查（' + tag + '）');
+console.log('  ' + (dirty === '' ? '✓' : '·') + ' 工作区' + (dirty === '' ? '干净' : '有 ' + String(dirty.split('\n').length) + ' 处未提交改动'));
+console.log('  ' + (hasTag ? '✓' : '·') + ' 本地 tag ' + tag + (hasTag ? ' 已存在' : ' 还没有'));
+console.log('  ' + (remote === null ? '·' : '✓') + ' 远程仓库 ' + (remote ?? '还没配 origin'));
+console.log('  ✓ 发布包 ' + target.split('/').pop());
+
+console.log('');
+console.log('接着三步：');
+console.log('  1. 提交推送     git add -A && git commit -m "..." && git push');
+console.log('  2. 打 tag 推送  git tag -a ' + tag + ' -m "Markdown Observer ' + tag + '" && git push origin ' + tag);
+console.log('  3. 建 Release   网页：仓库 → Releases → Draft a new release → 选 tag ' + tag);
+console.log('                  → 把 ' + target.split('/').pop() + ' 拖进 Attach binaries → Publish');
+console.log('                  （装了 gh 之后一条就够：gh release create ' + tag + ' "' + target + '" --title "' + tag + '" --generate-notes）');
+console.log('  · 别把这个 zip 提交进仓库：它是构建产物，Release 的附件不占仓库体积。');
+
+console.log('');
+console.log('Release 说明可以直接用这段：');
+console.log('----------------------------------------------------------');
+console.log('Markdown Observer ' + tag);
+console.log('');
+console.log('在浏览器里安静读 markdown 的小工具：排版与 DeepSeek Harness 的聊天正文一致，带目录、搜索、深色模式、可换背景；只读不改、不联网、不上传。');
+console.log('');
+console.log('**怎么用**：下载下面的 ' + target.split('/').pop() + '，解开后双击 markdown-observer.html（推荐 Chrome / Edge）。不用装任何东西，断网也能用。');
+console.log('');
+console.log('**这一版**：');
+console.log('- 首次发布：单文件版 + 服务模式（读整个文件夹、某一节的链接可以分享给别人）');
+console.log('');
+console.log('**需要什么**：Chrome / Edge（「打开文件夹」用到它们的能力；其它浏览器直接拖入单个文件即可）。');
+console.log('----------------------------------------------------------');

@@ -1,4 +1,4 @@
-# Markdown 阅读器
+# Markdown Observer
 
 一个**安安静静读 markdown 文件**的小工具：在浏览器里打开，排版、配色、代码块、公式都跟 DeepSeek Harness 的聊天正文一致，外面再套一层为长时间阅读准备的壳——能换背景、有目录、能搜索、记得你读到哪。
 
@@ -19,7 +19,7 @@
 
 ## A · 一个文件，双击就读
 
-1. 打开 `share/` 文件夹，找到 **`markdown-reader.html`**，**双击**它（推荐用 **Chrome 或 Edge**）；
+1. 打开 `share/` 文件夹，找到 **`markdown-observer.html`**，**双击**它（推荐用 **Chrome 或 Edge**）；
    > 这个文件是**生成出来**的（仓库里不带它，因为它把用到的库和字体全内联了，有 1 MB）：跑一次 `node tools/build-share.mjs` 就有了。
 2. 把 `.md` 文件**拖进窗口**，或者点窗口中间那张「打开文件」的卡片；
 3. 想读一整个文件夹：点「打开文件夹」，选一个目录，左侧立刻出现这棵目录树。
@@ -123,7 +123,7 @@
 装上 [Node.js](https://nodejs.org) 再双击一次就行；不想装的话直接用方式 A 的那份 HTML，功能一样。
 
 **怎么知道服务还开着、地址是多少？**
-启动时终端里会打印地址；同一目录下 `.md-reader.pid` 里也记着 PID、端口和文档目录。
+启动时终端里会打印地址；同一目录下 `.markdown-observer.pid` 里也记着 PID、端口和文档目录。
 
 **关不掉服务怎么办？**
 `./stop.sh`（Windows 用 `stop.bat`）。如果你是在 Windows 上双击 `start.bat` 起的，关掉那个最小化的命令行窗口也一样。

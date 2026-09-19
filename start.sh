@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # ─────────────────────────────────────────────────────────────
-# Markdown 阅读器 · 启动脚本（Linux / WSL / macOS 通用）
+# Markdown Observer · 启动脚本（Linux / WSL / macOS 通用）
 #
 # 用法：
 #   ./start.sh                 打开当前目录
@@ -36,7 +36,7 @@ fi
 
 ROOT=$(cd "$ROOT" && pwd)
 # 记录"当前跑着的那一个服务"（PID 端口 目录）：停止脚本与"别起第二个"都靠它
-PID_FILE="$DIR/.md-reader.pid"
+PID_FILE="$DIR/.markdown-observer.pid"
 
 # 没指定端口就自己找一个空闲的（从 4321 往上试）
 if [ -z "$PORT" ]; then
@@ -104,7 +104,7 @@ while [ $i -lt 30 ]; do
   sleep 0.1
 done
 
-echo "Markdown 阅读器：$URL"
+echo "Markdown Observer：$URL"
 echo "文档目录：$ROOT"
 if [ "$OPEN" = "1" ]; then
   open_browser "$URL" || echo "（没能自动打开浏览器，请手动访问上面的地址）"

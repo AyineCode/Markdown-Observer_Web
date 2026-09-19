@@ -1124,7 +1124,7 @@
     $('foot-right').textContent = docs.length > 1
       ? (docs.length + ' 个文档 · Ctrl+Tab 切换')
       : '按 / 搜索 · T 换深浅色 · \\ 收起侧栏';
-    document.title = next.name + ' · Markdown 阅读器';
+    document.title = next.name + ' · Markdown Observer';
 
     buildToc();
     stage.scrollTop = typeof next.scroll === 'number' ? next.scroll : 0;
@@ -1167,7 +1167,7 @@
     $('foot-left').textContent = '';
     $('foot-right').textContent = '';
     $('progress-bar').style.width = '0%';
-    document.title = 'Markdown 阅读器';
+    document.title = 'Markdown Observer';
     buildToc();
     renderDocList();
     markActiveFile(undefined);

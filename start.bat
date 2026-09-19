@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 rem ─────────────────────────────────────────────────────────────
-rem  Markdown 阅读器 · Windows 启动脚本
+rem  Markdown Observer · Windows 启动脚本
 rem  双击即可：起本地服务 + 打开浏览器。
 rem  想指定文档目录：把文件夹拖到本文件上，或在命令行里 start.bat D:\notes
 rem ─────────────────────────────────────────────────────────────
@@ -20,7 +20,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-start "Markdown 阅读器（关掉这个窗口即停止服务）" /min node "%DIR%serve.mjs" "%ROOT%" --port %PORT%
+start "Markdown Observer（关掉这个窗口即停止服务）" /min node "%DIR%serve.mjs" "%ROOT%" --port %PORT%
 timeout /t 2 /nobreak >nul
 start "" http://127.0.0.1:%PORT%/
 endlocal

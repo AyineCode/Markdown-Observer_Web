@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const APP = dirname(dirname(fileURLToPath(import.meta.url)))
-export const OUT_NAME = 'markdown-reader.html'
+export const OUT_NAME = 'markdown-observer.html'
 
 /** 读一个相对 APP 的文件。 */
 const read = (rel) => readFileSync(join(APP, rel), 'utf8')

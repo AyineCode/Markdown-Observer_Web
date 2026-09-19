@@ -193,7 +193,7 @@ server.on('error', (error) => {
 server.listen(PORT, '127.0.0.1', () => {
   const actual = server.address().port;
   if (OPTIONS.quiet !== true) {
-    console.log('Markdown 阅读器（服务模式）');
+    console.log('Markdown Observer（服务模式）');
     console.log('  文档根目录：' + ROOT);
     console.log('  打开：http://127.0.0.1:' + actual + '/');
     console.log('  Ctrl-C 结束');

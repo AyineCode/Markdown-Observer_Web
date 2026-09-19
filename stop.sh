@@ -1,12 +1,12 @@
 #!/usr/bin/env sh
 # ─────────────────────────────────────────────────────────────
-# 停掉由 start.sh 起的那个 Markdown 阅读器服务。用法： ./stop.sh
+# 停掉由 start.sh 起的那个 Markdown Observer服务。用法： ./stop.sh
 # ─────────────────────────────────────────────────────────────
 DIR=$(cd "$(dirname "$0")" && pwd)
-PID_FILE="$DIR/.md-reader.pid"
+PID_FILE="$DIR/.markdown-observer.pid"
 
 if [ ! -f "$PID_FILE" ]; then
-  echo "没有记录到正在运行的服务（.md-reader.pid 不存在）。"
+  echo "没有记录到正在运行的服务（.markdown-observer.pid 不存在）。"
   echo "若确实有一个在跑，用 ps aux | grep serve.mjs 找出来再 kill。"
   exit 0
 fi
