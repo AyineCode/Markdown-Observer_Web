@@ -143,3 +143,7 @@
 ---
 
 想改它（安装、目录结构、样式保真度、自测脚本、默认值改哪里）：见 [DEVELOPING.md](DEVELOPING.md)。
+
+---
+
+Markdown渲染部分代码参考DSH源码。
