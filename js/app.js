@@ -627,13 +627,12 @@
       if (list !== null) list.classList.add('contains-task-list');
     });
 
-    // ④ 图片：懒加载 + 可点开大图；服务模式下把相对路径改写到 /api/raw
+    // ④ 图片：懒加载 + 可点开大图；相对路径交给宿主处理（见 applyImages）
     $$('.markdown img', content).forEach((img) => {
       img.classList.add('image', 'clickable');
       img.loading = 'lazy';
       img.decoding = 'async';
       img.referrerPolicy = 'no-referrer';
-      rewriteRelativeSrc(img);
       img.addEventListener('click', () => openLightbox(img.src));
     });
 
@@ -731,22 +730,13 @@
   }
 
   /**
-   * 服务模式下把文档里的相对图片路径改写到 /api/raw，这样同目录的图片能显示。
-   * 静态模式（file://）没有服务器，相对图片无法解析——保留原样，显示为破图。
+   * 渲染完之后，把正文里的相对图片交给宿主换成"取得到"的地址：
+   *   服务模式 → /api/raw?path=…；文件夹模式 → blob URL；纯浏览器 → 保持原样（显示为破图）。
+   * 渲染本身是同步的，这一步是异步的，所以单独放在渲染之后跑一遍。
    */
-  function rewriteRelativeSrc(img) {
-    if (serverRoot === null || currentDoc === null || currentDoc.path === undefined) return;
-    const value = img.getAttribute('src');
-    if (value === null || value === '' || /^(https?:|data:|blob:|\/)/i.test(value)) return;
-    const base = currentDoc.path.split('/').slice(0, -1).join('/');
-    const joined = base === '' ? value : base + '/' + value;
-    const parts = [];
-    for (const seg of joined.split('/')) {
-      if (seg === '' || seg === '.') continue;
-      if (seg === '..') parts.pop();
-      else parts.push(seg);
-    }
-    img.setAttribute('src', '/api/raw?path=' + encodeURIComponent(parts.join('/')));
+  async function applyImages() {
+    if (currentDoc === null) return;
+    await host.fixImages($$('.markdown img', content), currentDoc.path);
   }
 
   // ─────────────────────────── 6. 目录 / 进度 / 位置记忆 / 搜索 ───────────────────────────
@@ -1040,8 +1030,322 @@
 
   // ─────────────────────────── 7. 打开文档 ───────────────────────────
 
-  /** 服务模式下是文档根目录；静态模式（file://）为 null。 */
-  let serverRoot = null;
+  /*
+     ── 宿主（host）：阅读器的数据来源 ──
+
+     阅读器本身只认 markdown 文本；"文本和图片从哪儿来"全部交给宿主回答。
+     现在有三个宿主：
+       none    纯浏览器——只有拖进来 / 手选的文件，没有列表
+       folder  文件夹——浏览器把整个目录交给我们（webkitdirectory），File 对象留在内存里
+       server  本地服务——serve.mjs 的 HTTP 接口（Windows"打开方式"双击起来的就是它）
+     以后 VSCode 插件、Windows 原生窗口再各加一个：只要实现下面这几个方法，
+     正文渲染、目录、搜索、进度、设置这些一行都不用改。
+
+     一个宿主回答这些问题：
+       id            名字（none / folder / server …），用来判断当前是什么模式
+       rootName      根目录显示名，没有就 null
+       hasTree       左侧是否真的列出了文件
+       count         列了多少篇（给空状态的文案用）
+       single        只打开这一篇（双击 md 的那种模式）；没有就 null
+       canPickFolder 还能不能"自己选一个文件夹"
+       canDeepLink   地址栏能不能带 ?file=（只有服务模式能）
+       list()        → 路径数组
+       read(path)    → { text, name, size }
+       fixImages(imgs, docPath)   把正文里的相对图片换成宿主取得到的地址
+       heartbeat()   可选：定期告诉宿主"我还在"（服务端据此空闲退出）
+       watch(cb)     可选：文件变了叫一声（将来做"保存即刷新"用）
+  */
+
+  /**
+   * 把文档里写的相对路径，按"文档所在目录"拼成宿主根目录下的路径。
+   * @param {string[]} base 文档所在目录的各段（如 ['docs','guide']）
+   * @param {string} rel 文档里写的相对路径（如 '../img/a.png'）
+   * @returns {string} 拼好并消掉 . 和 .. 的路径（如 'img/a.png'）
+   */
+  function joinPath(base, rel) {
+    const parts = base.slice();
+    for (const seg of rel.split('/')) {
+      if (seg === '' || seg === '.') continue;
+      if (seg === '..') parts.pop();
+      else parts.push(seg);
+    }
+    return parts.join('/');
+  }
+
+  /** 纯浏览器宿主：拖放、Ctrl+O 选文件；没有列表，也没有相对图片。 */
+  function noneHost() {
+    return {
+      id: 'none',
+      rootName: null,
+      hasTree: false,
+      count: 0,
+      single: null,
+      canPickFolder: true,
+      canDeepLink: false,
+      async list() { return [] },
+      async read() { throw new Error('这个模式下没有文件列表，读不了路径') },
+      // file:// 下浏览器不允许网页读同目录的文件，相对图片只能保持原样（显示为破图）
+      async fixImages() {},
+    };
+  }
+
+  /** 文件夹宿主：整个目录（含子目录）的 File 对象都在手上，图片可以转成 blob。 */
+  function folderHost(files, paths, name) {
+    /** 这个宿主生成的 blob URL：换文档时要回收，不然内存越用越多。 */
+    let blobUrls = [];
+    return {
+      id: 'folder',
+      rootName: name === '' ? null : name,
+      hasTree: paths.length > 0,
+      count: paths.length,
+      single: null,
+      canPickFolder: true,
+      canDeepLink: false,
+      async list() { return paths },
+      async read(path) {
+        const file = files.get(path);
+        if (file === undefined) throw new Error('这个文件已经不在了（可能被移动或删除）');
+        return { text: await file.text(), name: file.name, size: file.size };
+      },
+      async fixImages(imgs, docPath) {
+        for (const url of blobUrls) URL.revokeObjectURL(url);
+        blobUrls = [];
+        if (docPath === undefined) return;
+        const base = docPath.split('/').slice(0, -1);
+        for (const img of imgs) {
+          const raw = img.getAttribute('src');
+          if (raw === null || /^(https?:|data:|blob:)/i.test(raw)) continue;
+          const file = files.get(joinPath(base, raw));
+          if (file === undefined) continue;
+          try {
+            const url = URL.createObjectURL(file);
+            blobUrls.push(url);
+            img.setAttribute('src', url);
+          } catch {
+            // 造不出 blob URL 就保持原样（显示为破图），不影响读正文
+          }
+        }
+      },
+    };
+  }
+
+  /** 服务宿主：一切走 HTTP（serve.mjs 的 /api/*）。 */
+  function serverHost(info, initial) {
+    /*
+      shape = 'file'  ：双击打开的那种（只读这一篇，左侧不显示文件夹）
+      shape = 'folder'：服务一个目录（左侧有文件夹结构树）
+      形态是**会变**的：网页里点「打开文件夹」→ 服务端弹系统选择框 → 服务端扫描 → 就变成 folder 了。
+      所以 rootName / hasTree 用 getter，读的时候现算，别缓存成死值。
+    */
+    /*
+      这个页面要不要"工作区"（文件夹树）：
+        · 地址栏带了 ?root=…        → 要（托盘开的"新工作区"，或者页内选过文件夹）
+        · 双击那一篇 / ?blank=1    → 不要（就是单篇阅读，或者一个干净页面）
+        · 光打开首页（没参数）      → 看服务启动时的形态（用目录启动的才有树）
+      以前这里直接看服务端的形态，而那是**全局**的——于是新开的页面会莫名其妙带上别人的文件夹树。
+    */
+    const tree = initial.root !== null
+      ? true
+      : (initial.blank || initial.path !== null) ? false : info.shape === 'folder';
+    const state = {
+      tree,
+      name: typeof info.name === 'string' ? info.name : '',
+      root: initial.root,
+      treeCount: 0,
+      treeCapped: false,
+    };
+    const single = typeof info.file === 'string' && info.file !== '' ? info.file : null;
+    return {
+      id: 'server',
+      get rootName() {
+        if (state.root !== null) return state.root.split('/').filter((part) => part !== '').pop() || state.root;
+        return state.tree && state.name !== '' ? state.name : null;
+      },
+      get hasTree() { return state.tree },
+      canNativeDialog: true,   // 服务模式：系统选择框由托盘弹（这样才有真实路径）
+      /** 当前工作区的绝对路径（写地址栏时要保留它）。 */
+      get workspaceRoot() { return state.root },
+      get treeNote() {
+        return state.treeCapped ? ('这个文件夹太大了，只列了前 ' + state.treeCount + ' 篇') : null;
+      },
+      count: 0,
+      single,
+      openMode: typeof info.openMode === 'string' ? info.openMode : 'reuse',
+      skipDirs: Array.isArray(info.skipDirs) ? info.skipDirs : null,
+      canPickFolder: true,
+      canDeepLink: true,
+      async list() {
+        if (!state.tree) return [];
+        const query = state.root === null ? '' : '?root=' + encodeURIComponent(state.root);
+        const res = await fetch('api/tree' + query);
+        const data = await res.json();
+        const files = Array.isArray(data.files) ? data.files : [];
+        state.treeCount = files.length;
+        state.treeCapped = data.capped === true;
+        return files;
+      },
+      /** 这个页面换一个工作区（页内选了文件夹）：只影响本页，不动别人。 */
+      applyRoot(payload) {
+        state.tree = true;
+        state.name = typeof payload.name === 'string' ? payload.name : '';
+        state.root = typeof payload.root === 'string' && payload.root !== '' ? payload.root : null;
+      },
+      async read(path) {
+        let res;
+        try {
+          res = await fetch('api/file?path=' + encodeURIComponent(path));
+        } catch {
+          throw new Error('读取失败：连不上本地服务');   // 服务挂了、或者页面被挪到了别处
+        }
+        const data = await res.json();
+        if (!res.ok || data.error !== undefined) throw new Error(data.error || '打不开这个文件');
+        return { text: data.text, name: data.name, size: data.size };
+      },
+      async fixImages(imgs, docPath) {
+        if (docPath === undefined) return;
+        const base = docPath.split('/').slice(0, -1);
+        for (const img of imgs) {
+          const raw = img.getAttribute('src');
+          if (raw === null || raw === '' || /^(https?:|data:|blob:|\/)/i.test(raw)) continue;
+          img.setAttribute('src', '/api/raw?path=' + encodeURIComponent(joinPath(base, raw)));
+        }
+      },
+      /**
+       * 定期报个平安：服务端据此判断"还有人在看吗"，没人看就自己退出
+       * （双击 md 起来的服务不该在后台赖着不走，见 serve.mjs 的 --idle）。
+       * 页面切到后台时浏览器会把定时器降频到每分钟一次，所以间隔取 20 秒、服务端超时 300 秒，留足余量。
+       */
+      /**
+       * 挂一条长连接到服务端（SSE）。这条连接干两件事：
+       *   ① 它是"页面还开着"的证明——服务端据此决定：复用这个页面，还是新开一个标签；
+       *   ② 它同时是推送通道：双击另一篇时，服务端顺着它说一句"换这篇"。
+       * 浏览器不支持 EventSource 时返回 false，调用方会退回心跳轮询（笨一点，但一样能用）。
+       * @param {(payload: {type: string}) => void} onPush 服务端推来消息时调用（换一篇 / 换了文件夹）
+       * @returns {boolean} 连接挂上了没有
+       */
+      listen(onPush) {
+        if (typeof window.EventSource !== 'function') return false;
+        try {
+          const source = new window.EventSource('api/events');
+          source.addEventListener('message', (event) => {
+            let payload;
+            try {
+              payload = JSON.parse(event.data);
+            } catch {
+              return;   // 看不懂的消息就当没收到
+            }
+            if (payload !== null && typeof payload.type === 'string') onPush(payload);
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      /** 没有 SSE 时的兜底：定期报个平安。 */
+      heartbeat() {
+        const ping = () => { fetch('api/ping', { cache: 'no-store' }).catch(() => {}) };
+        ping();
+        window.setInterval(ping, 20000);
+      },
+    };
+  }
+
+  /** 当前宿主。启动时先当作"纯浏览器"，探测到服务、或选了文件夹再换掉。 */
+  let host = noneHost();
+
+  /** 服务端记着的偏好：双击 md 时 reuse = 复用开着的页面，tab = 每次新开标签页。 */
+  let serverOpenMode = 'reuse';
+
+  /**
+   * 扫描时忽略的文件夹名（设置 → 行为 → 高级 里可改，存在服务端）。
+   * null = 还没从服务端拿到，用内置默认。
+   */
+  let serverSkipDirs = null;
+
+  /** 当前该跳过哪些目录名。服务端给的那份优先——扫描是服务端做的，浏览器读文件夹时也照它来。 */
+  function skipNames() {
+    return new Set(Array.isArray(serverSkipDirs) && serverSkipDirs.length > 0 ? serverSkipDirs : SKIP_DIR_NAMES);
+  }
+
+  /**
+   * 保存"扫描时忽略的文件夹名"。这一项存在服务端：扫描是服务端做的，
+   * 浏览器读文件夹时也照它跳过——两边共用一份，免得各跳各的。
+   */
+  async function saveSkipDirs() {
+    const list = $('skip-dirs').value.split(/[\n,]/).map((name) => name.trim()).filter((name) => name.length > 0);
+    serverSkipDirs = list;
+    try {
+      await fetch('api/pref', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ skipDirs: list }),
+      });
+      toast('扫描时会跳过这 ' + list.length + ' 个名字');
+    } catch {
+      toast('设置没能存到服务端');
+    }
+  }
+
+  /**
+   * 服务端推过来的消息，两种：
+   *   open —— 双击了另一篇：切过去（同一篇会走"已在列表里"那条路，不会开两份）
+   *   root —— 有人（通常是托盘菜单）打开了另一个文件夹：跟着换，左侧树重新扫
+   * @param {{type: string, doc?: {path: string}, name?: string}} payload
+   */
+  async function handlePush(payload) {
+    if (payload.type === 'open' && payload.doc !== undefined) {
+      await openPath(payload.doc.path, true);
+      return;
+    }
+
+  }
+
+  /**
+   * 把"跟当前宿主有关"的界面重新摆一遍。
+   * 换宿主时要跑；宿主自己变了形态（比如网页里刚打开了一个文件夹）之后也要跑一次。
+   */
+  async function reapplyHost() {
+    const name = host.rootName;
+    // 这一行只显示"打开的那个文件夹"的名字；还没打开就是空的（右边的 ＋ 是唯一的按钮）
+    $('root-name').textContent = name === null ? '' : name;
+    $('root-line').hidden = !host.canPickFolder;
+    $('btn-open-folder').hidden = !host.canPickFolder;
+    if (host.hasTree) {
+      try {
+        setTree(await host.list());
+      } catch {
+        toast('读不到文件列表');
+      }
+    } else {
+      setTree([]);   // 单篇形态：把上一位宿主留下的树清掉
+    }
+    if (typeof host.treeNote === 'string' && host.treeNote !== '') toast(host.treeNote);
+    applyEmptyState();
+  }
+
+  /**
+   * 换一个宿主：根目录名、文件树、空状态这些"跟数据来源有关"的界面跟着变。
+   * @param {ReturnType<typeof noneHost>} next 新宿主
+   */
+  async function useHost(next) {
+    host = next;
+    await reapplyHost();
+    // 服务宿主会挂一条长连接：推送"换一篇"靠它，顺便就把心跳轮询替掉了
+    if (typeof next.listen === 'function') {
+      const connected = next.listen((payload) => { void handlePush(payload) });
+      if (connected === false && typeof next.heartbeat === 'function') next.heartbeat();
+    } else if (typeof next.heartbeat === 'function') {
+      next.heartbeat();
+    }
+    if (typeof next.openMode === 'string') {
+      serverOpenMode = next.openMode;   // 这一项存在服务端（它才是决定往哪儿推的人）
+      syncControls();
+    }
+    if (Array.isArray(next.skipDirs)) {
+      serverSkipDirs = next.skipDirs;
+      $('skip-dirs').value = next.skipDirs.join('\n');
+    }
+  }
 
   /** 探测是否跑在服务模式下（同一套界面，两种用法）。 */
   async function detectServer() {
@@ -1103,6 +1407,15 @@
     activateDoc(doc.id);
   }
 
+  /** 标题栏下面那行小字：路径 · 大小 · 字数。 */
+  function updateDocMeta(doc) {
+    const bits = [];
+    if (doc.path !== undefined) bits.push(doc.path);
+    if (doc.size > 0) bits.push(formatSize(doc.size));
+    bits.push(countWords(doc.text) + ' 字');
+    $('doc-meta').textContent = bits.join(' · ');
+  }
+
   /** 切到某份文档：先记住当前这篇读到哪，再渲染目标那篇。 */
   function activateDoc(id) {
     const next = docs.find((doc) => doc.id === id);
@@ -1116,17 +1429,14 @@
     document.body.dataset.reading = 'true';
 
     $('doc-title').textContent = next.name;
-    const bits = [];
-    if (next.path !== undefined) bits.push(next.path);
-    if (next.size > 0) bits.push(formatSize(next.size));
-    bits.push(countWords(next.text) + ' 字');
-    $('doc-meta').textContent = bits.join(' · ');
+    updateDocMeta(next);
     $('foot-left').textContent = next.name;
     $('foot-right').textContent = docs.length > 1
       ? (docs.length + ' 个文档 · Ctrl+Tab 切换')
       : '按 / 搜索 · T 换深浅色 · \\ 收起侧栏';
     document.title = next.name + ' · Markdown Observer';
 
+    syncLocationForDoc(next);
     buildToc();
     stage.scrollTop = typeof next.scroll === 'number' ? next.scroll : 0;
     onScroll();
@@ -1134,7 +1444,7 @@
     renderDocList();
     markActiveFile(next.path);
     closeSearch();
-    void resolveLocalImages();
+    void applyImages();
   }
 
   /** 关掉一份文档；关的是当前这篇就顺位切到邻居。 */
@@ -1169,6 +1479,7 @@
     $('foot-right').textContent = '';
     $('progress-bar').style.width = '0%';
     document.title = 'Markdown Observer';
+    syncLocationForDoc(null);
     buildToc();
     renderDocList();
     markActiveFile(undefined);
@@ -1223,38 +1534,18 @@
     openDoc(text, { key: 'file:' + file.name + ':' + file.size, name: file.name, size: file.size, source: 'file' });
   }
 
-  /** 服务模式下按路径打开文档。 */
   /**
-   * 按路径打开文档。两种来源共用这一条路径：
-   *   服务模式 → HTTP 接口；文件夹模式 → 浏览器给的目录句柄。
-   * @param {string} path 相对根目录的路径
-   * @param {boolean} [updateHash] 是否把当前文档写进地址栏
+   * 按路径打开一篇文档：数据由当前宿主提供（服务模式走 HTTP，文件夹模式走内存里的 File）。
+   * @param {string} path 相对宿主根目录的路径
+   * @param {boolean} [updateHash] 是否把当前文档写进地址栏（只有服务模式有意义）
    */
-  async function openServerPath(path, updateHash) {
+  async function openPath(path, updateHash) {
     try {
-      let text;
-      let name;
-      let size = 0;
-      if (serverRoot !== null) {
-        const res = await fetch('api/file?path=' + encodeURIComponent(path));
-        const data = await res.json();
-        if (!res.ok || data.error !== undefined) { toast(data.error || '打不开这个文件'); return }
-        text = data.text;
-        name = data.name;
-        size = data.size;
-      } else if (folderFiles.has(path)) {
-        const file = folderFiles.get(path);   // 文件夹模式里存的就是 File 对象
-        text = await file.text();
-        name = file.name;
-        size = file.size;
-      } else {
-        toast('这个文件已经不在了（可能被移动或删除）');
-        return;
-      }
-      if (updateHash !== false) setLocation(path);
-      openDoc(text, { key: 'path:' + path, name, size, path, source: serverRoot === null ? 'folder' : 'server' });
-    } catch {
-      toast('读取失败');
+      const doc = await host.read(path);
+      if (updateHash !== false && host.canDeepLink) setLocation(path);
+      openDoc(doc.text, { key: 'path:' + path, name: doc.name, size: doc.size, path, source: host.id });
+    } catch (error) {
+      toast(error instanceof Error && error.message !== '' ? error.message : '读取失败');
     }
   }
 
@@ -1266,11 +1557,33 @@
   /** 当前文档在树里的路径，用于高亮。 */
   let activePath;
 
-  /** 把"相对路径列表"折成一棵目录树。 */
+  /**
+   * 一批绝对路径的公共目录前缀（按 '/' 分段比）。
+   * 服务端现在给的是绝对路径（/home/you/notes/a.md、C:/notes/a.md），
+   * 但左侧那棵树要从"打开的那个目录"开始画——所以先切掉公共前缀。
+   * 不切的话整棵树会挂在一个空名字的目录底下，还折叠着，看着就是"一个文件都没有"。
+   * @param {string[]} paths 绝对路径
+   * @returns {string[]} 公共前缀的各段；没有公共目录就是空数组
+   */
+  function commonDirPrefix(paths) {
+    if (paths.length === 0) return [];
+    let prefix = paths[0].split('/').slice(0, -1);
+    for (const path of paths.slice(1)) {
+      const parts = path.split('/').slice(0, -1);
+      let i = 0;
+      while (i < prefix.length && i < parts.length && prefix[i] === parts[i]) i += 1;
+      prefix = prefix.slice(0, i);
+      if (prefix.length === 0) break;
+    }
+    return prefix;
+  }
+
+  /** 把一串路径折成一棵目录树：层级从公共目录开始，dataset.path 里存的仍是完整路径。 */
   function buildTree(paths) {
     const root = { name: '', full: '', dirs: new Map(), files: [] };
+    const prefix = commonDirPrefix(paths);
     for (const path of paths) {
-      const parts = path.split('/');
+      const parts = path.split('/').slice(prefix.length);
       let node = root;
       for (let i = 0; i < parts.length - 1; i += 1) {
         const name = parts[i];
@@ -1293,7 +1606,6 @@
   function setTree(paths) {
     treeRoot = buildTree(paths);
     const empty = treeRoot.dirs.size === 0 && treeRoot.files.length === 0;
-    $('files-label').hidden = empty;
     $('docs-empty').hidden = empty || docs.length > 0;
     renderFileTree();
   }
@@ -1341,7 +1653,7 @@
       label.textContent = file.name;
       row.appendChild(label);
       row.title = file.path;
-      row.addEventListener('click', () => { void openServerPath(file.path) });
+      row.addEventListener('click', () => { void openPath(file.path) });
       box.appendChild(row);
     }
   }
@@ -1459,10 +1771,32 @@
     window.setTimeout(() => { chip.hidden = true; }, 200);
   }
 
-  /** 把当前文档写进地址栏（服务模式）：?file=路径#锚点。 */
-  function setLocation(path, anchor) {
-    if (serverRoot === null) return;
-    const query = path === undefined ? '' : '?file=' + encodeURIComponent(path);
+  /**
+   * 地址栏跟着"当前这篇"走。
+   * 有路径（服务模式下打开的）就写 ?file=…；没有路径（浏览器选的、拖进来的）就把查询清掉——
+   * 不然地址栏会一直停在上一篇上，看着像坏了。
+   * @param {{path?: string} | null} doc 当前文档；null = 一篇都没有了
+   */
+  function syncLocationForDoc(doc) {
+    if (!host.canDeepLink) return;
+    setLocation(doc !== null && typeof doc.path === 'string' ? doc.path : undefined);
+  }
+
+  /**
+   * 把当前状态写进地址栏：?root=工作区 & ?file=当前这篇 & #锚点。
+   * @param {string} [path] 要写进去的文档路径；不传 = 不写（清掉）
+   * @param {string} [anchor] 锚点
+   * @param {string|null} [root] 工作区；**不传 = 保留当前这个**（切文档不该把工作区丢了）
+   */
+  function setLocation(path, anchor, root) {
+    if (!host.canDeepLink) return;
+    const workspace = root === undefined
+      ? (typeof host.workspaceRoot === 'string' ? host.workspaceRoot : null)
+      : root;
+    const params = new URLSearchParams();
+    if (workspace !== null && workspace !== undefined) params.set('root', workspace);
+    if (path !== undefined && path !== null) params.set('file', path);
+    const query = params.toString() === '' ? '' : '?' + params.toString();
     const hash = anchor === undefined || anchor === '' ? '' : '#' + anchor;
     try {
       history.replaceState(null, '', location.pathname + query + hash);
@@ -1471,10 +1805,17 @@
     }
   }
 
-  /** 从地址栏读出要打开什么：?file=路径（旧格式 #路径 也认）与 #锚点。 */
+  /**
+   * 从地址栏读出要打开什么：
+   *   ?file=路径   要打开的那一篇（旧格式 #路径 也认）
+   *   ?root=绝对路径  这个页面的工作区（每个页面可以各有各的文件夹）
+   *   ?blank=1     只要一个干净页面（不自动打开任何文档）
+   *   #锚点        跳到某一节
+   */
   function readLocation() {
     const params = new URLSearchParams(location.search);
     const fromQuery = params.get('file');
+    const workspace = params.get('root');
     const rawHash = decodeURIComponent(location.hash.slice(1));
     let path = fromQuery === null ? null : fromQuery;
     let anchor = rawHash === '' ? null : rawHash;
@@ -1483,7 +1824,12 @@
       path = anchor;
       anchor = null;
     }
-    return { path, anchor };
+    return {
+      path,
+      anchor,
+      root: workspace === null || workspace === '' ? null : workspace,
+      blank: params.has('blank'),
+    };
   }
 
   /** 自己改写地址栏时的防重入标记（否则会重复滚动、并把"返回原处"的起点记错）。 */
@@ -1495,7 +1841,7 @@
     const raw = decodeURIComponent(location.hash.slice(1));
     if (raw === '') return;
     if (findHeading(raw) !== null) { scrollToAnchor(raw, false); return }
-    if (serverRoot !== null && /\.(md|markdown|mdown|mkd|txt)$/i.test(raw)) { void openServerPath(raw, false) }
+    if (host.canDeepLink && /\.(md|markdown|mdown|mkd|txt)$/i.test(raw)) { void openPath(raw, false) }
   }
   // ── 浏览器原生文件夹模式（File System Access API） ──
   /*
@@ -1503,27 +1849,99 @@
      Chromium 系浏览器允许网页读取用户主动选择的文件夹，于是没有服务器也能有文件树；
      Firefox / Safari 没有这个能力，按钮会给出提示，其余功能照常。
   */
-  /** 路径 → File（文件夹模式下用它读正文与图片）。 */
-  const folderFiles = new Map();
   /** 遍历时跳过的目录名。 */
   const SKIP_DIR_NAMES = new Set(['node_modules', '.git', 'dist', 'build', 'out', 'vendor', 'venv', '.venv', '__pycache__']);
-  /** 文件夹模式下生成的图片 blob URL，切换文档时要回收。 */
-  let localImageUrls = [];
 
   /**
    * 让用户选一个文件夹：点一下那个 hidden 的 <input webkitdirectory>（见 index.html）。
    * 选完由 readFolder 接手——真正的读目录逻辑在那里，因为这个函数只是"打开选择框"。
    */
-  function openDirectory() {
-    if (serverRoot !== null) { toast('服务模式已经指定了根目录'); return }
+  /** 正在弹系统选择框？挡住重复请求：连点两下不该排出两个窗口（文件夹和文件共用这一道闸）。 */
+  let pickingDialog = false;
+
+  /**
+   * 请托盘弹"选择文件夹"（Windows 10/11 那个新式窗口，和浏览器弹的是同一个）。
+   * 托盘会自己把选中的文件夹交给服务端，服务端再顺着长连接通知页面——所以这里只要等它一句回话。
+   * @returns {Promise<boolean>} true = 已经处理过了（选好了，或者用户主动取消）
+   */
+  /**
+   * 请托盘弹"选择文件"（Windows 10/11 那个新式窗口，只列 markdown）。
+   * 服务模式下用它，而不是浏览器自己的选择框——**浏览器不给真实路径**：
+   * 地址栏没法跟着走，双击那套 URL 也接不上，文档只能在内存里待着。
+   * @returns {Promise<boolean>} true = 处理过了（选好了，或者用户主动取消）
+   */
+  async function tryTrayPickFile() {
+    try {
+      const res = await fetch('http://127.0.0.1:47822/pick-file', { signal: AbortSignal.timeout(180000) });
+      const data = await res.json();
+      if (data === null || typeof data !== 'object') return false;
+      if (data.cancelled === true) return true;   // 用户取消：也算"处理过了"
+      return data.ok === true;                    // 选好了：托盘会把文件交给服务端，服务端推给这个页面
+    } catch {
+      return false;   // 托盘没在跑 → 让调用方走浏览器的路
+    }
+  }
+
+  /** 「打开文件」：服务模式下用托盘的新式窗口，其它模式用浏览器自己的。 */
+  async function pickFile() {
+    if (pickingDialog) return;
+    pickingDialog = true;
+    try {
+      if (host.canNativeDialog) {
+        toast('正在打开文件选择框…');
+        if (await tryTrayPickFile()) return;
+      }
+      $('file-input').click();
+    } finally {
+      pickingDialog = false;
+    }
+  }
+
+  async function tryTrayPickFolder() {
+    try {
+      const res = await fetch('http://127.0.0.1:47822/pick-folder', { signal: AbortSignal.timeout(180000) });
+      const data = await res.json();
+      if (data === null || typeof data !== 'object') return false;
+      if (data.cancelled === true) return true;   // 用户取消：也算"处理过了"，别再弹第二个框
+      if (data.ok !== true) return false;
+      // 托盘会把选中的目录报回来：这个页面认它当自己的工作区（只影响本页，不动别人）
+      if (typeof host.applyRoot === 'function') {
+        host.applyRoot({ name: data.name, root: data.root });
+        const doc = currentDoc !== null && typeof currentDoc.path === 'string' ? currentDoc.path : undefined;
+        setLocation(doc, undefined, typeof data.root === 'string' ? data.root : null);
+      }
+      return true;
+    } catch {
+      return false;   // 托盘没在跑 / 连不上 → 让调用方走别的路
+    }
+  }
+
+  async function openDirectory() {
+    if (!host.canPickFolder) { toast('现在这个模式不能打开文件夹'); return }
     /*
-      先说一句再弹选择框：这种打开方式下，浏览器必须把选中的文件夹**整个通读一遍**才能
-      把文件交给我们（node_modules 也不例外——实测一个代码仓库有 7 万个文件，其中 5.6 万个
-      在 node_modules 里），这一步可能要等很久。先提示一下，免得以为按钮坏了。
-      真遇到大仓库，服务模式（./start.sh）在后台遍历、还会跳过这些目录，快得多。
+      一次只弹一个：连点两下加号不该排出两个窗口，
+      关掉一个又冒出一个（这个"弹弹弹"真的发生过）。
     */
-    toast('选好文件夹后请稍等：文件夹很大时（比如代码仓库）浏览器要先整个读一遍');
-    $('folder-input').click();
+    if (pickingDialog) return;
+    pickingDialog = true;
+    try {
+      /*
+        优先请**托盘**弹 Windows 10/11 那个新式选择框：网页和托盘都在 Windows 上，直接连本机就行
+        （服务端可能跑在 WSL 里，反而连不到托盘那边的 localhost——这一步只能放在网页这边）。
+        走托盘的另一个好处：选完由服务端扫描，会跳过 node_modules 这类目录，大文件夹也是秒开。
+      */
+      toast('正在打开文件夹选择框…');
+      if (await tryTrayPickFolder()) { await reapplyHost(); setSidebar(true); return }
+      /*
+        托盘不在才走这里：用浏览器自己的选择框——它也是系统那个新式窗口，放心。
+        代价是浏览器必须把选中的文件夹**整个通读一遍**（node_modules 也不例外），大文件夹要等很久。
+        （以前这里会退回服务端的老式对话框，现在那条路已经删掉了：不为省一点等待就弹一个老气窗口。）
+      */
+      toast('选好文件夹后请稍等：文件夹很大时（比如代码仓库）浏览器要先整个读一遍');
+      $('folder-input').click();
+    } finally {
+      pickingDialog = false;
+    }
   }
 
   /** 一次最多收多少篇：目录太大时先保证界面还能用。 */
@@ -1546,7 +1964,8 @@
     const files = Array.from(fileList ?? []);
     if (files.length === 0) return;   // 用户取消（取消时不会触发 change，这里是兜底）
     const total = files.length;       // 浏览器一共交来多少（含我们马上会跳过的 node_modules）
-    folderFiles.clear();
+    /** 路径 → File。它只属于这一次选中的文件夹，所以是本函数的局部变量。 */
+    const byPath = new Map();
     const paths = [];
     let rootName = '';
     let capped = false;
@@ -1558,18 +1977,16 @@
       if (parts.length < 2) continue;                      // 没在子目录里的条目，跳过
       rootName = parts[0];
       const path = parts.slice(1).join('/');
-      if (path.split('/').some((seg) => seg.startsWith('.') || SKIP_DIR_NAMES.has(seg))) continue;
+      if (path.split('/').some((seg) => seg.startsWith('.') || skipNames().has(seg))) continue;
       if (!/\.(md|markdown|mdown|mkd|txt)$/i.test(path)) continue;
       if (paths.length >= MAX_FOLDER_FILES) { capped = true; continue }
-      folderFiles.set(path, file);
+      byPath.set(path, file);
       paths.push(path);
     }
     paths.sort((a, b) => a.localeCompare(b, 'zh'));
-    $('root-name').textContent = rootName;
-    $('root-line').hidden = rootName === '';
-    setTree(paths);
+    // 换宿主：根目录名、左侧文件树、空状态一起更新（图片也从此交给这个宿主去取）
+    void useHost(folderHost(byPath, paths, rootName));
     setSidebar(true);
-    applyEmptyState();
     const notes = [];
     if (capped) notes.push('只列了前 ' + MAX_FOLDER_FILES + ' 篇');
     // 交来的文件特别多时解释一句：为什么慢、为什么树里看不到 node_modules
@@ -1579,35 +1996,6 @@
       : ('找到 ' + paths.length + ' 个 markdown 文件' + (notes.length > 0 ? '（' + notes.join('；') + '）' : '')));
   }
 
-  /**
-   * 文件夹模式下，把正文里的相对图片换成 blob URL（本地文件没有服务器可读）。
-   * 渲染是同步的，所以这里在渲染之后异步补一遍。
-   */
-  async function resolveLocalImages() {
-    for (const url of localImageUrls) URL.revokeObjectURL(url);
-    localImageUrls = [];
-    if (folderFiles.size === 0 || currentDoc === null || currentDoc.path === undefined) return;
-    const base = currentDoc.path.split('/').slice(0, -1);
-    for (const img of $$('.markdown img', content)) {
-      const raw = img.getAttribute('src');
-      if (raw === null || /^(https?:|data:|blob:)/i.test(raw)) continue;
-      const parts = base.slice();
-      for (const seg of raw.split('/')) {
-        if (seg === '' || seg === '.') continue;
-        if (seg === '..') parts.pop();
-        else parts.push(seg);
-      }
-      const file = folderFiles.get(parts.join('/'));
-      if (file === undefined) continue;
-      try {
-        const url = URL.createObjectURL(file);
-        localImageUrls.push(url);
-        img.src = url;
-      } catch {
-        // 读不到就保持原样（显示为破图）
-      }
-    }
-  }
   /** 图片灯箱：点开大图 / 关闭。 */
   function openLightbox(src) {
     $('lightbox-img').src = src;
@@ -1686,9 +2074,31 @@
     }
     $('sw-serif').setAttribute('aria-pressed', String(settings.serif));
     $('sw-wrap').setAttribute('aria-pressed', String(settings.wrapCode));
+    $('sw-opentab').setAttribute('aria-pressed', String(serverOpenMode === 'tab'));
     renderRecents();
   }
 
+
+  /**
+   * "双击 md 时要不要新开标签页"。
+   * 这一项**存在服务端**——因为双击时做决定的是服务（它才知道有没有页面连着），
+   * 所以改完要 POST 过去，不能只写浏览器的 localStorage。
+   * @param {'reuse'|'tab'} mode reuse = 复用开着的页面；tab = 每次新开标签页
+   */
+  async function setOpenMode(mode) {
+    serverOpenMode = mode;
+    syncControls();
+    try {
+      await fetch('api/pref', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ openMode: mode }),
+      });
+      toast(mode === 'tab' ? '双击时将新开标签页' : '双击时将复用已开着的标签页');
+    } catch {
+      toast('设置没能存到服务端');
+    }
+  }
 
   function setTheme(theme) {
     settings.theme = theme;
@@ -1715,11 +2125,13 @@
     applyReading();
   }
 
-  /** 设置面板的三段（外观 / 排版 / 背景）。 */
+  /** 设置面板的三页（排版 / 背景 / 行为）。 */
   function setSettingsTab(tab) {
-    const name = tab === 'bg' ? 'bg' : 'type';
+    let name = tab === 'bg' || tab === 'act' ? tab : 'type';
+    if (name === 'act' && $('tab-act').hidden) name = 'type';   // 「行为」只在服务模式下才有
     $('pop-type').hidden = name !== 'type';
     $('pop-bg').hidden = name !== 'bg';
+    $('pop-act').hidden = name !== 'act';
     $$('[data-ptab]').forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.ptab === name)));
     if ($('popover').hidden === false) { placePopover(); syncPopScroll() }   // 换页签后重摆位置；两页长短不同，渐隐提示也要重算
   }
@@ -1730,15 +2142,24 @@
    *   · 浏览器不支持读取文件夹（Firefox / Safari）→ 也藏掉"打开文件夹"。
    */
   function applyEmptyState() {
-    const hasListing = serverRoot !== null || folderFiles.size > 0;
+    const hasListing = host.hasTree;                    // 左边真的有东西可点吗
     $('card-browse').hidden = !hasListing;
-    $('card-folder').hidden = hasListing;   // 现在任何浏览器都能读文件夹，不用再藏
+    // "打开文件夹"只在宿主还允许自选目录时出现（服务模式已经指定了根目录，单文件模式也是）
+    $('card-folder').hidden = hasListing || !host.canPickFolder;
     // 选完文件夹之后，中间那块空状态还是原来那句"把文件拖进来"——用户会以为没反应。
     // 这里让它改口说清楚"东西在左边"，这也是"选完文件夹之后到底发生了什么"的即时反馈。
-    const folderCount = folderFiles.size;
-    if (folderCount > 0) {
-      $('empty-sub').textContent = '左侧已经列出这个文件夹里的 ' + folderCount + ' 篇文档——点一篇就开始读。';
-    } else if (serverRoot !== null) {
+
+    // 那句"目录特别大…"只对纯浏览器模式有意义：服务模式是服务端扫描，快得多
+    $('empty-note').hidden = host.id === 'server';
+    // 「行为」那一页里只有"双击时新开标签页"，而这一项存在服务端——别的模式整页收起来
+    const actTab = $('tab-act');
+    if (actTab.hidden !== (host.id !== 'server')) {
+      actTab.hidden = host.id !== 'server';
+      if (actTab.hidden) setSettingsTab('type');
+    }
+    if (host.id === 'folder' && host.count > 0) {
+      $('empty-sub').textContent = '左侧已经列出这个文件夹里的 ' + host.count + ' 篇文档——点一篇就开始读。';
+    } else if (hasListing) {
       $('empty-sub').textContent = '把 .md 文件拖进窗口，或点左侧文件树里的文件：';
     } else {
       $('empty-sub').textContent = '排版与 DeepSeek Harness 的聊天正文一致，字号、行距、背景都可以调。把 .md 文件拖进窗口，或选一种方式打开：';
@@ -1895,14 +2316,25 @@
       if (pop.hidden) openPopover(); else pop.hidden = true;
     });
     $('btn-print').addEventListener('click', () => window.print());
-    $('btn-open-file').addEventListener('click', () => $('file-input').click());
+    $('btn-open-file').addEventListener('click', () => { void pickFile(); });
     // 空状态里的三张卡
-    $('card-open').addEventListener('click', () => $('file-input').click());
+    $('card-open').addEventListener('click', () => { void pickFile(); });
     $('card-folder').addEventListener('click', () => { void openDirectory(); });
     $('card-browse').addEventListener('click', () => setSidebar(true));
     $('btn-sample').addEventListener('click', openSample);
     $('btn-reset').addEventListener('click', resetSettings);
     $('btn-open-folder').addEventListener('click', () => { void openDirectory(); });
+    // 高级：折叠开关 + "扫描时忽略的文件夹名"
+    $('btn-advanced').addEventListener('click', () => {
+      const body = $('advanced-body');
+      body.hidden = !body.hidden;
+      $('btn-advanced').textContent = body.hidden ? '展开' : '收起';
+      $('btn-advanced').setAttribute('aria-expanded', String(!body.hidden));
+    });
+    $('skip-dirs').addEventListener('change', () => { void saveSkipDirs(); });
+    $('sw-opentab').addEventListener('click', () => {
+      void setOpenMode(serverOpenMode === 'tab' ? 'reuse' : 'tab');
+    });
 
     // 设置面板的三个分段
     $$('[data-ptab]').forEach((btn) => btn.addEventListener('click', () => setSettingsTab(btn.dataset.ptab)));
@@ -1967,7 +2399,7 @@
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || (target !== null && target.isContentEditable === true);
       const mod = event.metaKey || event.ctrlKey;
 
-      if (mod && event.key.toLowerCase() === 'o') { event.preventDefault(); $('file-input').click(); return }
+      if (mod && event.key.toLowerCase() === 'o') { event.preventDefault(); void pickFile(); return }
       if (mod && event.key.toLowerCase() === 'f') { event.preventDefault(); openSearch(); return }
       if (event.key === 'Escape') {
         if ($('lightbox').hidden === false) { closeLightbox(); return }
@@ -2038,29 +2470,58 @@
     await migrateLegacyImage();
     await loadStoredBackground();
 
+    const initial = readLocation();
+    /*
+      地址栏里可能带着一个 ?n=时间戳：那只是"让浏览器肯开一个新标签"的记号（同地址它会跳到已开的标签）。
+      看到就把它抹掉——留在地址栏里又难看、分享出去更莫名其妙。
+    */
+    if (new URLSearchParams(location.search).has('n')) {
+      const clean = new URLSearchParams(location.search);
+      clean.delete('n');
+      const query = clean.toString();
+      try {
+        history.replaceState(null, '', location.pathname + (query === '' ? '' : '?' + query) + location.hash);
+      } catch {
+        // 改不了就算了，不影响阅读
+      }
+    }
     const info = await detectServer();
     if (info !== null) {
-      // 服务模式：根目录由启动参数决定，文件列表走 HTTP 接口
-      serverRoot = info.root;
-      $('root-name').textContent = info.name;
-      $('root-line').hidden = false;
-      $('btn-open-folder').hidden = true;   // 已经有根目录了，不再需要选文件夹
-      try {
-        const res = await fetch('api/tree');
-        const data = await res.json();
-        setTree(Array.isArray(data.files) ? data.files : []);
-      } catch {
-        toast('读不到文件列表');
-      }
+      // 服务模式：根目录由启动参数决定，文件列表、正文、图片都走 HTTP 接口。
+      // 地址栏带了 ?root= 的话，这个页面就认那个文件夹当自己的工作区（托盘开的"新工作区"）。
+      await useHost(serverHost(info, initial));
     }
     // 静态模式不用做额外处理："打开文件夹"现在靠 <input webkitdirectory>，任何浏览器都能用
 
     applyEmptyState();
 
+    /*
+      ?diag：把左侧栏几个关键元素的"实际情况"打到控制台。
+      排版问题隔着屏幕很难猜，让用户开一次 F12 → Console 把这段贴回来，比来回问十句有用。
+    */
+    if (new URLSearchParams(location.search).has('diag')) {
+      const ids = ['sidebar', 'sidebar-body', 'pane-docs', 'btn-open-file', 'root-line', 'root-name', 'file-tree', 'doc-list', 'doc-list', 'docs-empty'];
+      const lines = ids.map((id) => {
+        const node = $(id);
+        if (node === null) return id + ': (element missing)';
+        const style = window.getComputedStyle(node);
+        return id + ': hidden=' + node.hidden + ' display=' + style.display + ' visibility=' + style.visibility
+          + ' height=' + style.height + ' margin=' + style.margin + ' padding=' + style.padding
+          + ' overflow=' + style.overflowY + ' text=' + JSON.stringify((node.textContent || '').trim().slice(0, 24));
+      });
+      console.log('[diag] sidebar\n' + lines.join('\n'));
+    }
+
     // 地址栏里可能带着要打开的文档与小节（可分享的深链接）
-    const initial = readLocation();
-    if (initial.path !== null && serverRoot !== null) {
-      await openServerPath(initial.path, false);
+    if (initial.path !== null && host.canDeepLink) {
+      await openPath(initial.path, false);
+      if (initial.anchor !== null) scrollToAnchor(initial.anchor, false);
+    } else if (initial.root !== null || initial.blank) {
+      // 这个页面是"新工作区"或者"干净页面"：什么都不自动打开，就是 start 页
+    } else if (host.single !== null) {
+      // 单文件模式（双击 md 起来的）：启动参数指定的那篇直接打开，刷新页面还是它。
+      // updateHash 传 true：地址栏也跟着显示当前这篇（可分享、刷新也不丢）
+      await openPath(host.single, true);
       if (initial.anchor !== null) scrollToAnchor(initial.anchor, false);
     } else if (initial.anchor !== null && docs.length > 0) {
       scrollToAnchor(initial.anchor, false);

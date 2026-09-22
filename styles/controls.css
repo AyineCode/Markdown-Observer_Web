@@ -728,6 +728,53 @@ body[data-sidebar='open'] .scrim.visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 22%, transparent);
 }
 
+/* 说明文字后面再跟一行控件时别贴着（说明自己只有 12px 上边距，容易显得挤） */
+.pop-note + .pop-row {
+  margin-top: 10px;
+}
+
+/* 多行文本（设置里的"扫描时忽略的文件夹名"）：高一点、内容多了内部竖向滚动 */
+.text-area {
+  width: 100%;
+  min-height: 96px;
+  max-height: 180px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  resize: vertical;
+  overflow-y: auto;
+}
+
+.text-area:focus {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 22%, transparent);
+}
+
+/* 一行文本输入（设置里"扫描时忽略的文件夹名"这种）：比数字框宽，正常左对齐 */
+.text-input {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 22%, transparent);
+}
+
 .suffix {
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);

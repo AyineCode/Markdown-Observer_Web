@@ -13,6 +13,8 @@ markdown-observer.html
 markdown-observer-v*.zip
 *-v[0-9]*.zip
 share/
+tools/win/MarkdownObserver.exe
+tools/win/.argvprobe.*
 
 .markdown-observer.pid
 .md-reader.pid

@@ -7,12 +7,16 @@
  * 跑法（cwd 需要是 dsh 源码根目录，借它的 jsdom）：
  *   node ../md-reader/tools/smoke.mjs            # 静态模式（含模拟文件夹模式）
  *   node ../md-reader/tools/smoke.mjs --server   # 服务模式
+ *   node ../md-reader/tools/smoke.mjs --single   # 单文件模式（serve.mjs --file，Windows"打开方式"用的那个）
  *   DOC_ROOT=../sprite-plugin node ../md-reader/tools/smoke.mjs --server   # 指定文档目录
  */
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { connect } from 'node:net';
+import { tmpdir } from 'node:os';
+import { get as httpGet } from 'node:http';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 const CHECKOUT = process.env.DSH_CHECKOUT ?? fileURLToPath(new URL('../../deepseek-harness-ayine/', import.meta.url));
@@ -21,6 +25,11 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 
 const APP = fileURLToPath(new URL('../', import.meta.url));
 const useServer = process.argv.includes('--server');
+// --single：单文件模式（serve.mjs --file）。它和 --server 共用"从 HTTP 加载页面"这条路，
+// 但页面应该是"直接打开那一篇、左侧不列文件"的样子，所以只跑它自己的那一组检查。
+const useSingle = process.argv.includes('--single');
+/** 页面从本地服务加载（服务模式 / 单文件模式都算）。 */
+const fromServer = useServer || useSingle;
 // --standalone：测那份"发给朋友的单文件 HTML"，而不是开发用的 index.html
 const useStandalone = process.argv.includes('--standalone');
 // 测试用独立端口：不打扰你自己跑着的那个服务（默认 4321）
@@ -30,23 +39,43 @@ let failures = 0;
 function check(label, actual, expected) {
   const ok = actual === expected;
   if (!ok) failures += 1;
-  console.log((ok ? '  ok   ' : '  FAIL ') + label + ' -> ' + JSON.stringify(actual) + (ok ? '' : '（期望 ' + JSON.stringify(expected) + '）'));
+  console.log((ok ? '  ok   ' : '  FAIL ') + label + ' -> ' + JSON.stringify(actual) + (ok ? '' : ' (expected ' + JSON.stringify(expected) + '）'));
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const problems = [];
 const virtualConsole = new VirtualConsole();
 virtualConsole.on('jsdomError', (error) => {
-  if (/Not implemented/.test(error.message)) problems.push('未实现: ' + error.message.split('\n')[0]);
+  if (/Not implemented/.test(error.message)) problems.push('not implemented: ' + error.message.split('\n')[0]);
   else problems.push('jsdomError: ' + error.message);
 });
 virtualConsole.on('error', (...args) => problems.push('console.error: ' + args.map(String).join(' ')));
 
 let server = null;
-if (useServer) {
+if (fromServer) {
+  // 先确认端口上没人在跑：serve.mjs 现在会"接到已经在跑的服务上"，
+  // 万一上一次测试没清干净，这里会悄悄连到旧服务，报出一堆莫名其妙的失败。
+  try {
+    const stale = await fetch('http://127.0.0.1:' + PORT + '/api/info');
+    if (stale.ok) {
+      console.error('port ' + PORT + ' already has a service running (probably left over from a previous run).');
+      console.error('clear it first: pkill -f serve.mjs');
+      process.exit(1);
+    }
+  } catch {
+    // 没人应答 = 端口是干净的
+  }
   const docRoot = process.env.DOC_ROOT ?? APP;
   // 端口必须显式传给被拉起的服务，否则它会用默认的 4321（可能撞上你自己开着的那个）
-  server = spawn(process.execPath, [join(APP, 'serve.mjs'), docRoot, '--port', String(PORT)], { stdio: 'ignore' });
+  // --prefs：把偏好写到临时文件，别动用户自己那份；每次开跑前清掉，免得上次留下的设置影响这次
+  const prefs = join(tmpdir(), 'md-reader-smoke-prefs.json');
+  rmSync(prefs, { force: true });
+  // --no-browser 很重要：测试里会调 /api/open，没人连着时它会真去开浏览器，
+  // 那是给用户用的行为，自测里不该在你桌面上弹标签页。
+  const args = useSingle
+    ? [join(APP, 'serve.mjs'), '--file', join(APP, 'sample.md'), '--port', String(PORT), '--prefs', prefs, '--no-browser']
+    : [join(APP, 'serve.mjs'), docRoot, '--port', String(PORT), '--prefs', prefs, '--no-browser'];
+  server = spawn(process.execPath, args, { stdio: 'ignore' });
   let up = false;
   for (let i = 0; i < 50 && !up; i += 1) {
     try {
@@ -57,7 +86,7 @@ if (useServer) {
     }
   }
   if (!up) {
-    console.error('服务没有在端口 ' + PORT + ' 上起来（可能被占用）');
+    console.error('service did not come up on port ' + PORT + ' (maybe the port is taken)');
     process.exit(1);
   }
 }
@@ -90,18 +119,37 @@ const options = {
       const res = await fetch(url, init);
       return { ok: res.ok, status: res.status, json: () => res.json(), text: () => res.text() };
     };
+    /*
+      jsdom 没有 EventSource。给一个最小替身（只实现我们用到的部分），
+      这样"服务端推送 → 页面换一篇"这条链路也能在自测里跑到。
+      测试里用 window.__sse.emit({...}) 假装服务端推了一条消息。
+    */
+    function FakeEventSource(url) {
+      this.url = url;
+      this.handlers = {};
+      window.__sse = this;
+    }
+    FakeEventSource.prototype.addEventListener = function (type, fn) {
+      (this.handlers[type] = this.handlers[type] || []).push(fn);
+    };
+    FakeEventSource.prototype.emit = function (payload) {
+      for (const fn of this.handlers.message || []) fn({ data: JSON.stringify(payload) });
+    };
+    FakeEventSource.prototype.close = function () {};
+    window.EventSource = FakeEventSource;
+
     // jsdom 里没有"选文件夹"这回事：静态模式下把假文件列表挂在 window 上，测试里再喂给 #folder-input
     if (!useServer) {
       window.__FAKE_FOLDER__ = fakeFolderFiles(window, {
-        'a.md': '# 文档 A\n\n第一份文档。\n\n## 小节一\n\n内容。\n',
-        'sub/b.md': '# 文档 B\n\n第二份文档。\n\n## 小节二\n\n内容。\n',
+        'a.md': '# Doc A\n\nFirst document.\n\n## Section one\n\nBody.\n',
+        'sub/b.md': '# Doc B\n\nSecond document.\n\n## Section two\n\nBody.\n',
       }, 'notes');
     }
   },
 };
 
 const entry = useStandalone ? join(APP, 'markdown-observer.html') : join(APP, 'index.html');
-const dom = useServer
+const dom = fromServer
   ? await JSDOM.fromURL('http://127.0.0.1:' + PORT + '/', options)
   : await JSDOM.fromFile(entry, options);
 const { window } = dom;
@@ -116,54 +164,171 @@ await sleep(200);
 const id = (name) => document.getElementById(name);
 const key = (k, options) => document.dispatchEvent(new window.KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true }, options)));
 
-console.log(useServer ? '== 服务模式 ==' : (useStandalone ? '== 单文件分享版 ==' : '== 静态模式（含模拟的文件夹模式） =='));
-console.log('1) 依赖与初始状态');
+console.log(useServer ? '== server mode ==' : (useSingle ? '== single-file mode (serve.mjs --file) ==' : (useStandalone ? '== standalone share build ==' : '== static mode (with simulated folder mode) ==')));
+
+if (useSingle) {
+  // 这个模式的全部意义：双击一篇 md，页面直接就是那一篇，左侧干干净净。
+  console.log('1) opens the file it was started with');
+  check('libraries still load', typeof window.marked, 'object');
+  check('the file from the command line opens by itself', id('doc-title').textContent, 'sample.md');
+  check('entered reading state', document.body.dataset.reading, 'true');
+  check('body rendered (not an empty shell)', id('content').querySelectorAll('h1, h2, p').length > 0, true);
+  check('outline has entries', id('toc').querySelectorAll('.row').length > 0, true);
+  check('exactly one open document', id('doc-list').querySelectorAll('.doc-row').length, 1);
+  console.log('2) no file list on the left');
+  check('file tree is empty', id('file-tree').querySelectorAll('.row').length, 0);
+  check('folder row has no name yet', id('root-name').textContent, '');
+  check('Workspace label is there', document.querySelectorAll('.pane-docs .section-label').length >= 1, true);
+  check('folder row has no name yet', id('root-name').textContent, '');
+  check('the row is visible', id('root-line').hidden, false);
+  // 作者样式里的 display 会盖掉浏览器对 [hidden] 的默认处理，这里量一下"真的没被藏"（这个坑踩过）
+  check('the row is not display:none', window.getComputedStyle(id('root-line')).display !== 'none', true);
+
+  check('empty state does not suggest the left list', id('card-browse').hidden, true);
+  check('empty state keeps the Open-file card', id('card-open').hidden, false);
+  console.log('3) server API');
+  const singleInfo = await (await fetch('http://127.0.0.1:' + PORT + '/api/info')).json();
+  check('shape is single-file', singleInfo.shape, 'file');
+  check('info.file points at the startup file (absolute)', singleInfo.file.endsWith('/sample.md'), true);
+  check('its folder is in the allow-list', singleInfo.roots.length >= 1 && singleInfo.roots[0].endsWith('/md-reader'), true);
+  const singleTree = await (await fetch('http://127.0.0.1:' + PORT + '/api/tree')).json();
+  check('tree is empty', singleTree.files.length, 0);
+  // 白名单是服务唯一的围栏，值得一条断言守着
+  const outside = await fetch('http://127.0.0.1:' + PORT + '/api/file?path=' + encodeURIComponent('/etc/passwd'));
+  check('paths outside the allow-list are blocked', outside.status, 400);
+  // Host 头校验只能用原始 socket 测：fetch 不允许手写 Host（它属于被禁止的头）
+  const rawStatus = await new Promise((resolve) => {
+    const socket = connect(PORT, '127.0.0.1', () => {
+      socket.write('GET /api/info HTTP/1.1\r\nHost: evil.example.com\r\nConnection: close\r\n\r\n');
+    });
+    let text = '';
+    socket.on('data', (chunk) => { text += chunk });
+    socket.on('end', () => resolve(Number((/^HTTP\/1\.1 (\d+)/.exec(text) ?? [])[1] ?? 0)));
+    socket.on('error', () => resolve(0));
+  });
+  check('a wrong Host header is blocked (DNS rebinding)', rawStatus, 403);
+  console.log('4) resident and reuse');
+  // 用一条真的 HTTP 长连接冒充"开着的阅读器页面"：服务端据此决定复用页面还是新开标签
+  const live = httpGet({ host: '127.0.0.1', port: PORT, path: '/api/events' }, (res) => { res.on('data', () => {}) });
+  await sleep(250);
+  const opened = await (await fetch('http://127.0.0.1:' + PORT + '/api/open?path=' + encodeURIComponent(singleInfo.file))).json();
+  check('the open API accepts the file', opened.ok, true);
+  check('with a page connected the server reuses it', opened.mode, 'reuse');
+  live.destroy();
+  // 断开的察觉是异步的，给它几秒钟（真实使用里"关掉页面"和"再双击"之间隔得远得多）
+  let alone = null;
+  for (let i = 0; i < 12; i += 1) {
+    await sleep(300);
+    alone = await (await fetch('http://127.0.0.1:' + PORT + '/api/open?path=' + encodeURIComponent(singleInfo.file))).json();
+    if (alone.mode === 'tab') break;
+  }
+  check('with nobody connected the server opens a new tab', alone.mode, 'tab');
+  console.log('5) server pushes a file -> the page follows');
+  check('event stream connected', window.__sse !== undefined && window.__sse.url.endsWith('api/events'), true);
+  const other = singleInfo.roots[0] + '/DEVELOPING.md';
+  window.__sse.emit({ type: 'open', doc: { path: other, name: 'DEVELOPING.md' } });
+  await sleep(400);
+  check('switched to the pushed file', id('doc-title').textContent, 'DEVELOPING.md');
+  check('two documents in the sidebar list now', id('doc-list').querySelectorAll('.doc-row').length, 2);
+  // 工作区是"每个页面自己的事"：没有 ?root= 的页面不该凭空长出一棵别人的树
+  console.log('5b) a page without ?root= has no workspace of its own');
+  check('no tree on a single-file page', id('file-tree').querySelectorAll('.row').length, 0);
+  check('the folder row stays empty', id('root-name').textContent, '');
+  // 作者样式里的 display 会盖掉浏览器对 [hidden] 的处理（踩过两次：文件夹那一行、文件树）。
+  // 全页面扫一遍：凡是带 hidden 的元素，计算样式里都不许被显示出来。
+  const stuckHidden = [...document.querySelectorAll('[hidden]')].filter((node) => window.getComputedStyle(node).display !== 'none');
+  check('every [hidden] element is really hidden', stuckHidden.map((node) => node.id || node.className).join(','), '');
+  // 为了"让浏览器肯开一个新标签"而在地址里加的 ?n=时间戳，用完就该抹掉（留着难看、分享出去更莫名其妙）
+  console.log('5c) the ?n= marker is cleaned out of the address bar');
+  const cleanPage = await JSDOM.fromURL('http://127.0.0.1:' + PORT + '/?blank=1&n=12345', options);
+  await new Promise((resolve) => {
+    if (cleanPage.window.document.readyState === 'complete') resolve();
+    else cleanPage.window.addEventListener('load', resolve);
+  });
+  await sleep(300);
+  check('the n= marker is gone', cleanPage.window.location.search.includes('n='), false);
+  check('blank=1 is kept', cleanPage.window.location.search.includes('blank=1'), true);
+  check('a blank page opens no document', cleanPage.window.document.querySelectorAll('#doc-list .doc-row').length, 0);
+  cleanPage.window.close();
+  console.log('6) settings: the Behavior tab');
+  check('the Behavior tab appears (server mode only)', id('tab-act').hidden, false);
+  check('Advanced inside Behavior is collapsed by default', id('advanced-body').hidden, true);
+  check('the skip list was read from the server', id('skip-dirs').value.includes('node_modules'), true);
+  id('btn-advanced').click();
+  check('clicking Expand opens it', id('advanced-body').hidden, false);
+  id('sw-opentab').click();
+  await sleep(400);
+  const pref = await (await fetch('http://127.0.0.1:' + PORT + '/api/pref')).json();
+  check('the switch saved to the server', pref.openMode, 'tab');
+  const opened2 = await (await fetch('http://127.0.0.1:' + PORT + '/api/open?path=' + encodeURIComponent(other))).json();
+  check('after switching to new-tab a new tab opens even with a page connected', opened2.mode, 'tab');
+  console.log('7) a second workspace (what the tray menu opens)');
+  const keep = await (await fetch('http://127.0.0.1:' + PORT + '/api/root?keep=1&path=' + encodeURIComponent(singleInfo.roots[0] + '/tools'))).json();
+  check('keep=1 allows a folder without switching', keep.ok, true);
+  const wsTree = await (await fetch('http://127.0.0.1:' + PORT + '/api/tree?root=' + encodeURIComponent(keep.root))).json();
+  check('the new workspace gets its own tree', wsTree.root.endsWith('/tools'), true);
+  const infoAfter = await (await fetch('http://127.0.0.1:' + PORT + '/api/info')).json();
+  check('the root of the other workspace was not switched', infoAfter.shape, 'file');
+  const denied = await fetch('http://127.0.0.1:' + PORT + '/api/tree?root=' + encodeURIComponent('/etc'));
+  check('a folder that was never allowed is refused', denied.status, 400);
+  // 托盘菜单的"退出"和 status.mjs --stop 都靠这个接口。放最后测：它会真的把服务关掉。
+  console.log('7) the quit API (used by the tray menu and status --stop)');
+  const quit = await (await fetch('http://127.0.0.1:' + PORT + '/api/quit')).json();
+  check('the quit API answers ok', quit.ok, true);
+  let gone = false;
+  for (let i = 0; i < 20 && !gone; i += 1) { await sleep(300); gone = server.exitCode !== null; }
+  check('the service is gone after /api/quit', gone, true);
+  server = null;
+  finish();
+}
+
+console.log('1) libraries and initial state');
 if (useStandalone) {
-  check('没有任何外部样式引用', document.querySelectorAll('link[rel=stylesheet]').length, 0);
-  check('没有任何外部脚本引用', document.querySelectorAll('script[src]').length, 0);
-  check('样式已内联', document.querySelectorAll('style').length >= 5, true);
-  check('公式字体已内联', document.documentElement.innerHTML.includes('data:font/woff2'), true);
+  check('no external stylesheet links', document.querySelectorAll('link[rel=stylesheet]').length, 0);
+  check('no external script links', document.querySelectorAll('script[src]').length, 0);
+  check('styles are inlined', document.querySelectorAll('style').length >= 5, true);
+  check('math fonts are inlined', document.documentElement.innerHTML.includes('data:font/woff2'), true);
   // 回归防线：内联字体时曾经把 src 列表一路吃到右花括号，20 条 @font-face 塌成 2 条，
   // 结果"开发页公式正常、打包出来用回退字体"。条数必须与源文件一致，且不能再引用外部字体。
   const builtCss = readFileSync(join(APP, 'markdown-observer.html'), 'utf8');
   const sourceK = readFileSync(join(APP, 'vendor', 'katex.min.css'), 'utf8');
-  check('打包后 @font-face 条数不少于源文件（现在 ' + (builtCss.match(/@font-face/g) ?? []).length + ' vs ' + (sourceK.match(/@font-face/g) ?? []).length + '）',
+  check('built file has at least as many @font-face rules as the source (now ' + (builtCss.match(/@font-face/g) ?? []).length + ' vs ' + (sourceK.match(/@font-face/g) ?? []).length + '）',
     (builtCss.match(/@font-face/g) ?? []).length >= (sourceK.match(/@font-face/g) ?? []).length, true);
-  check('打包后不再引用外部字体文件', (builtCss.match(/url\(\s*['"]?fonts\//g) ?? []).length, 0);
+  check('built file no longer references external fonts', (builtCss.match(/url\(\s*['"]?fonts\//g) ?? []).length, 0);
 }
 check('marked', typeof window.marked, 'object');
 check('hljs', typeof window.hljs, 'object');
 check('DOMPurify', typeof window.DOMPurify.sanitize, 'function');
 check('katex', typeof window.katex, 'object');
-check('示例文档已内嵌', typeof window.__SAMPLE_MD__, 'string');
-check('初始是空状态', document.body.dataset.reading, 'false');
-check('侧栏默认展开', document.body.dataset.sidebar, 'open');
-check('默认背景模式是"无背景"', document.body.dataset.bgMode, 'none');
-check('"无背景"是一层黑白渐变（不是死白）', window.getComputedStyle(document.documentElement).getPropertyValue('--plain-bg').includes('linear-gradient'), true);
+check('the sample document is embedded', typeof window.__SAMPLE_MD__, 'string');
+check('starts in the empty state', document.body.dataset.reading, 'false');
+check('sidebar starts open', document.body.dataset.sidebar, 'open');
+check('default background mode is plain', document.body.dataset.bgMode, 'none');
+check('plain mode is a subtle gradient, not flat white', window.getComputedStyle(document.documentElement).getPropertyValue('--plain-bg').includes('linear-gradient'), true);
 // 玻璃配方用的是 background-color 长写属性，jsdom 只把原始文本放在这个属性里
 const bgText = (cs) => String(cs.backgroundColor || '') + String(cs.backgroundImage || '') + String(cs.background || '');
 const sampleBtn = window.getComputedStyle(id('btn-sample'));
-check('按钮是玻璃：有磨砂', sampleBtn.backdropFilter.includes('blur'), true);
-check('按钮底色取自玻璃变量（--btn-glass-veil）', bgText(sampleBtn).includes('--btn-glass-veil'), true);
-check('浅色主题的按钮底色是"淡墨"，不是白纱', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-veil').trim(), '38 49 72');
+check('buttons are glass: frosted blur', sampleBtn.backdropFilter.includes('blur'), true);
+check('button fill comes from the glass variable', bgText(sampleBtn).includes('--btn-glass-veil'), true);
+check('light-theme button fill is ink, not white', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-veil').trim(), '38 49 72');
 // 底色降到 0：背景色原样透过，轮廓靠磨砂 + 凸感（顶部高光 / 底部内阴影 / 投影）
-check('按钮不再自带底色（0%，背景色原样透过来）', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-alpha').trim(), '0');
-check('凸感：有顶部高光与投影', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-rim').includes('inset 0 1px 0'), true);
-check('分段底板比按钮实（10%），才看得出是一条槽', window.getComputedStyle(id('card-open')).getPropertyValue('--seg-track-alpha').trim(), '0.10');
+check('buttons carry no fill of their own', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-alpha').trim(), '0');
+check('raised look: top highlight and shadow', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-rim').includes('inset 0 1px 0'), true);
+check('the segmented track is more opaque than buttons (10%)', window.getComputedStyle(id('card-open')).getPropertyValue('--seg-track-alpha').trim(), '0.10');
 // 图标按钮照 dsh 的做法：默认什么都不画，只有 hover 浮出一层淡色（不是玻璃片）
 const iconBtnStyle = window.getComputedStyle(document.querySelector('.topbar .icon-btn'));
-check('图标按钮默认没有底板（不再是玻璃片）', bgText(iconBtnStyle).includes('--btn-glass-veil'), false);
-check('图标按钮也不磨砂（一次 hover 反馈不值得挂 backdrop-filter）', iconBtnStyle.backdropFilter, 'none');
-check('拉出小圆同样不是玻璃片', bgText(window.getComputedStyle(id('btn-sidebar'))).includes('--btn-glass-veil'), false);
+check('icon buttons have no plate by default', bgText(iconBtnStyle).includes('--btn-glass-veil'), false);
+check('icon buttons are not frosted either', iconBtnStyle.backdropFilter, 'none');
+check('the pull-out circle is not a glass plate either', bgText(window.getComputedStyle(id('btn-sidebar'))).includes('--btn-glass-veil'), false);
 
-console.log('1b) 空状态：三张卡按环境显隐');
-check('空状态板在', id('empty').hidden, false);
-check('"打开文件"卡在', id('card-open').hidden, false);
+console.log('1b) empty state: cards show or hide per environment');
+check('the empty panel is present', id('empty').hidden, false);
+check('the Open-file card is present', id('card-open').hidden, false);
 if (useServer) {
-  check('服务模式：藏"打开文件夹"、亮"从左侧选择"', id('card-folder').hidden + '/' + id('card-browse').hidden, 'true/false');
+  check('server mode: hides Open-folder, shows Pick-on-the-left', id('card-folder').hidden + '/' + id('card-browse').hidden, 'true/false');
 } else {
-  check('本地模式：亮"打开文件夹"', id('card-folder').hidden, false);
-  check('本地模式：藏"从左侧选择"（还没有文档列表）', id('card-browse').hidden, true);
+  check('local mode: shows Open-folder', id('card-folder').hidden, false);
+  check('local mode: hides Pick-on-the-left (no list yet)', id('card-browse').hidden, true);
 }
 // 只观察"有没有真的去唤起文件选择框"：把 click 换掉，避免 jsdom 去实现真实的选择框
 const fileInput = id('file-input');
@@ -171,176 +336,178 @@ const realInputClick = fileInput.click.bind(fileInput);
 let pickerCalls = 0;
 fileInput.click = () => { pickerCalls += 1; };
 id('card-open').click();
-check('点"打开文件"卡会唤起文件选择框', pickerCalls, 1);
+// 服务模式下会先问一句托盘（它弹的是我们自己的窗口），问不到才回落到浏览器这个——所以要等一下
+await sleep(250);
+check('clicking the Open-file card opens the picker', pickerCalls, 1);
 fileInput.click = realInputClick;
 const cardStyle = window.getComputedStyle(id('card-open'));
-check('卡片横排：图标与文字在同一水平线上', cardStyle.flexDirection, 'row');
-check('图标与右侧两行文字垂直居中对齐', cardStyle.alignItems, 'center');
-check('文字块里是标题 + 说明两行', id('card-open').querySelector('.card-text').children.length, 2);
+check('cards are in a row: icon and text share a line', cardStyle.flexDirection, 'row');
+check('the icon is centered against the two text lines', cardStyle.alignItems, 'center');
+check('the text block has a title and a note line', id('card-open').querySelector('.card-text').children.length, 2);
 // 文字要在"自己那块空间"里居中：卡片左边还有图标，按整个按钮居中会偏
-check('卡片文字在自己那块里居中', window.getComputedStyle(id('card-open').querySelector('.card-text')).textAlign, 'center');
+check('card text is centered in its own block', window.getComputedStyle(id('card-open').querySelector('.card-text')).textAlign, 'center');
 // "大仓库请用服务模式"是卡片下面单独一行小灰字，不是卡片里的第三行
 const emptyNote = document.querySelector('.empty-note');
-check('大仓库提示在卡片外、单独一行', emptyNote !== null && emptyNote.textContent.includes('服务模式'), true);
-check('它在卡片那一行之后', emptyNote !== null && emptyNote.previousElementSibling === id('empty').querySelector('.empty-cards'), true);
-check('说明段落靠左对齐', window.getComputedStyle(document.querySelector('.empty-sub')).textAlign, 'left');
-check('卡片也走玻璃配方', cardStyle.backdropFilter.includes('blur') && bgText(cardStyle).includes('--btn-glass-veil'), true);
+check('the big-repo note sits outside the cards', emptyNote !== null && emptyNote.textContent.includes('服务模式'), true);
+check('it comes after the card row', emptyNote !== null && emptyNote.previousElementSibling === id('empty').querySelector('.empty-cards'), true);
+check('the note is left-aligned', window.getComputedStyle(document.querySelector('.empty-sub')).textAlign, 'left');
+check('cards use the glass recipe too', cardStyle.backdropFilter.includes('blur') && bgText(cardStyle).includes('--btn-glass-veil'), true);
 
-console.log('2) 渲染示例文档');
+console.log('2) rendering the sample document');
 id('btn-sample').click();
 await sleep(300);
 const content = id('content');
-check('进入阅读状态', document.body.dataset.reading, 'true');
-check('标题栏显示文档名', id('doc-title').textContent, 'sample.md');
-check('代码块外壳', content.querySelectorAll('.md-code-block').length, 5);
-check('语法高亮', content.querySelectorAll('.md-code-block .hljs').length, 4);
-check('复制按钮', content.querySelectorAll('.copyButton').length, 5);
-check('复制按钮也是玻璃', window.getComputedStyle(content.querySelector('.copyButton')).backdropFilter.includes('blur'), true);
-check('表格滚动容器', content.querySelectorAll('.tableScroll').length, 1);
-check('任务列表条目', content.querySelectorAll('li.task-list-item').length, 3);
-check('复选框禁用', content.querySelectorAll('input[type=checkbox][disabled]').length, 3);
-check('行内公式', content.querySelectorAll('.katex').length >= 4, true);
-check('独立公式块', content.querySelectorAll('.katex-display').length, 1);
-check('脚注区块', content.querySelectorAll('section.footnotes').length, 1);
-check('脚注反向标记', content.textContent.includes('↩'), true);
-check('图片可点', content.querySelectorAll('img.image.clickable').length, 1);
-check('外链新窗口', content.querySelector('a[target=_blank]') !== null, true);
-check('危险标签被清掉', content.innerHTML.includes('<script'), false);
+check('entered reading state', document.body.dataset.reading, 'true');
+check('the title bar shows the document name', id('doc-title').textContent, 'sample.md');
+check('code block shell', content.querySelectorAll('.md-code-block').length, 5);
+check('syntax highlighting', content.querySelectorAll('.md-code-block .hljs').length, 4);
+check('copy button', content.querySelectorAll('.copyButton').length, 5);
+check('copy button也是玻璃', window.getComputedStyle(content.querySelector('.copyButton')).backdropFilter.includes('blur'), true);
+check('table scroll container', content.querySelectorAll('.tableScroll').length, 1);
+check('task list item', content.querySelectorAll('li.task-list-item').length, 3);
+check('checkboxes are disabled', content.querySelectorAll('input[type=checkbox][disabled]').length, 3);
+check('inline math', content.querySelectorAll('.katex').length >= 4, true);
+check('display math block', content.querySelectorAll('.katex-display').length, 1);
+check('footnote section', content.querySelectorAll('section.footnotes').length, 1);
+check('footnote back-reference', content.textContent.includes('↩'), true);
+check('images are clickable', content.querySelectorAll('img.image.clickable').length, 1);
+check('external links open in a new window', content.querySelector('a[target=_blank]') !== null, true);
+check('dangerous tags are stripped', content.innerHTML.includes('<script'), false);
 
-console.log('3) 标题锚点（可读、支持中文）');
+console.log('3) heading anchors (readable, CJK friendly)');
 const codeHeading = content.querySelector('h2:nth-of-type(1)');
-check('锚点 id 是中文可读形式', content.querySelector('h2[id]').id.length > 0 && /[\u4e00-\u9fff]/.test(content.querySelector('h2[id]').id), true);
-check('重复标题会去重（无重复 id）', (() => { const ids = [...content.querySelectorAll('[id]')].map((n) => n.id); return ids.length === new Set(ids).size })(), true);
+check('the anchor id is the readable CJK form', content.querySelector('h2[id]').id.length > 0 && /[\u4e00-\u9fff]/.test(content.querySelector('h2[id]').id), true);
+check('duplicate headings get unique ids', (() => { const ids = [...content.querySelectorAll('[id]')].map((n) => n.id); return ids.length === new Set(ids).size })(), true);
 
-console.log('4) 文内跳转与深链接');
+console.log('4) in-page jumps and deep links');
 // 注意：href 里的中文会被浏览器/解析器编码成 %E6%95%B0…，比较时要解码
 const decode = (value) => decodeURIComponent(value || '');
 const jumpLink = [...content.querySelectorAll('a')].find((a) => decode(a.getAttribute('href')) === '#数学公式');
-check('示例里有站内链接', jumpLink !== undefined, true);
+check('the sample has an in-page link', jumpLink !== undefined, true);
 if (jumpLink !== undefined) {
   jumpLink.click();
   await sleep(120);
-  check('跳转后出现提示条', id('jump-chip').hidden, false);
-  check('地址栏记下了这一节', decode(window.location.hash), '#数学公式');
+  check('a chip appears after jumping', id('jump-chip').hidden, false);
+  check('the URL records the section', decode(window.location.hash), '#数学公式');
   id('jump-back').click();
   await sleep(320);   // 提示条有 200ms 淡出动画
-  check('提示条可以收起', id('jump-chip').hidden, true);
+  check('the chip can be dismissed', id('jump-chip').hidden, true);
 }
-check('找不到的锚点不会炸', (() => { try { key('Escape'); return true } catch { return false } })(), true);
+check('a missing anchor does not throw', (() => { try { key('Escape'); return true } catch { return false } })(), true);
 
-console.log('5) 主题切换');
+console.log('5) theme switching');
 document.querySelector('[data-theme="dark"]').click();
 await sleep(60);
-check('深色：body 属性', document.body.hasAttribute('data-ds-dark-theme'), true);
-check('深色：color-scheme', document.documentElement.style.colorScheme, 'dark');
-check('深色主题的按钮底色换成"淡光"（白纱，不是近黑）', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-veil').trim(), '255 255 255');
+check('dark: body attribute', document.body.hasAttribute('data-ds-dark-theme'), true);
+check('dark: color-scheme', document.documentElement.style.colorScheme, 'dark');
+check('dark-theme button fill becomes a light veil', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-veil').trim(), '255 255 255');
 // 回归：面板透明度由设置决定，深色主题下也必须是滑杆说了算（曾经被 body 上的规则盖掉）
 const glassNum = id('n-glass');
 glassNum.value = '45';
 glassNum.dispatchEvent(new window.Event('change', { bubbles: true }));
-check('深色主题下面板透明度听滑杆的', window.getComputedStyle(document.querySelector('.sidebar')).getPropertyValue('--glass-alpha').trim(), '0.45');
-check('深色下选中态明显比按钮实（24% vs 3%）', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-alpha-on').trim(), '0.24');
-check('深色下按钮同样不带底色', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-alpha').trim(), '0');
+check('panel opacity follows the slider in dark theme', window.getComputedStyle(document.querySelector('.sidebar')).getPropertyValue('--glass-alpha').trim(), '0.45');
+check('the selected state is clearly more opaque than buttons (24% vs 3%)', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-alpha-on').trim(), '0.24');
+check('buttons carry no fill in dark theme either', window.getComputedStyle(id('card-open')).getPropertyValue('--btn-glass-alpha').trim(), '0');
 document.querySelector('[data-theme="light"]').click();
 await sleep(60);
-check('浅色：属性移除', document.body.hasAttribute('data-ds-dark-theme'), false);
+check('light: attribute removed', document.body.hasAttribute('data-ds-dark-theme'), false);
 
-console.log('6) 文内搜索');
+console.log('6) in-document search');
 id('btn-search').click();
 const searchInput = id('search-input');
-check('搜索条打开', id('searchbar').hidden, false);
+check('the search bar opens', id('searchbar').hidden, false);
 searchInput.value = 'dsh';
 searchInput.dispatchEvent(new window.Event('input', { bubbles: true }));
 await sleep(250);
 const hitCount = content.querySelectorAll('mark.hit').length;
-check('命中已高亮', hitCount > 0, true);
-check('计数显示', id('search-count').textContent, '1/' + hitCount);
+check('hits are highlighted', hitCount > 0, true);
+check('the counter is shown', id('search-count').textContent, '1/' + hitCount);
 id('search-next').click();
 await sleep(60);
-check('当前命中只有一个', content.querySelectorAll('mark.hit.current').length, 1);
+check('exactly one current hit', content.querySelectorAll('mark.hit.current').length, 1);
 id('search-close').click();
 await sleep(60);
-check('关闭后高亮清空', content.querySelectorAll('mark.hit').length, 0);
+check('highlight cleared after closing', content.querySelectorAll('mark.hit').length, 0);
 
-console.log('7) 设置面板（两页 + 数字框）');
+console.log('7) settings panel (tabs + number fields)');
 id('btn-settings').click();
-check('面板打开', id('popover').hidden, false);
-check('默认在"排版"页', id('pop-type').hidden, false);
-check('设置里没有"外观"页（主题只在顶栏）', document.querySelector('[data-ptab="look"]'), null);
+check('the panel opens', id('popover').hidden, false);
+check('starts on the Typography tab', id('pop-type').hidden, false);
+check('no Appearance tab (theme lives in the top bar)', document.querySelector('[data-ptab="look"]'), null);
 // 全局设置入口搬到了左下角：它不该再出现在顶栏里，而且侧栏收起后也必须还在
 const seat = id('btn-settings');
-check('设置入口不在顶栏里了', document.querySelector('.topbar').contains(seat), false);
-check('设置入口固定在视口左下角', window.getComputedStyle(seat).position, 'fixed');
-check('侧栏底部为它留了空白（--sidebar-pad-bottom）', window.getComputedStyle(id('sidebar-body')).getPropertyValue('--sidebar-pad-bottom').trim(), '62px');
-check('设置里没有"显示侧栏"开关（它不是设置）', id('sw-sidebar'), null);
-check('衬线字体在排版页里', id('sw-serif') !== null && id('pop-type').contains(id('sw-serif')), true);
+check('the settings entry is no longer in the top bar', document.querySelector('.topbar').contains(seat), false);
+check('the settings entry is pinned bottom-left', window.getComputedStyle(seat).position, 'fixed');
+check('the sidebar reserves room for it', window.getComputedStyle(id('sidebar-body')).getPropertyValue('--sidebar-pad-bottom').trim(), '62px');
+check('no show-sidebar switch in settings', id('sw-sidebar'), null);
+check('the serif switch is on the Typography tab', id('sw-serif') !== null && id('pop-type').contains(id('sw-serif')), true);
 const num = id('n-scale');
 num.value = '120';
 num.dispatchEvent(new window.Event('change', { bubbles: true }));
-check('数字框改字号 → CSS 变量', document.documentElement.style.getPropertyValue('--read-scale'), '1.2');
-check('滑杆跟着同步', id('r-scale').value, '1.2');
+check('typing a size updates the CSS variable', document.documentElement.style.getPropertyValue('--read-scale'), '1.2');
+check('the slider follows', id('r-scale').value, '1.2');
 num.value = '999';
 num.dispatchEvent(new window.Event('change', { bubbles: true }));
-check('超范围会被夹住', num.value, '140');
+check('out-of-range values are clamped', num.value, '140');
 document.querySelector('[data-ptab="bg"]').click();
-check('切到"背景"页', id('pop-bg').hidden, false);
-check('最近使用有 5 个格子', id('recents').querySelectorAll('.recent').length, 5);
+check('switch to the Background tab', id('pop-bg').hidden, false);
+check('recents has 5 slots', id('recents').querySelectorAll('.recent').length, 5);
 // 空格子以前叫 .recent.empty，和"空状态面板"的 .empty 撞名，被那套 max-width/margin/padding/圆角顶到下一行
 const slotCell = id('recents').querySelector('.recent.slot');
-check('空格子用 slot 类，且不匹配空状态面板的 .empty', slotCell !== null && slotCell.matches('.empty') === false, true);
+check('empty slots use the slot class, not the empty-state .empty', slotCell !== null && slotCell.matches('.empty') === false, true);
 // "无背景"下模糊/遮罩没有作用对象：灰掉并给出说明，而不是让人以为滑杆坏了
-check('"无背景"下模糊被灰掉', id('r-blur').disabled && id('field-blur').dataset.off, 'true');
-check('"无背景"下遮罩被灰掉', id('r-dim').disabled && id('field-dim').dataset.off, 'true');
-check('说明文字换成了"无背景"的解释', id('bg-note').textContent.includes('无背景'), true);
+check('blur is disabled under plain mode', id('r-blur').disabled && id('field-blur').dataset.off, 'true');
+check('the dim slider is disabled under plain mode', id('r-dim').disabled && id('field-dim').dataset.off, 'true');
+check('the note explains plain mode', id('bg-note').textContent.includes('无背景'), true);
 id('swatches').querySelectorAll('.swatch')[0].click();   // 再点一次"无背景"：滑杆应保持灰
-check('点"无背景"色板：模糊仍是灰的', id('r-blur').disabled, true);
+check('clicking the plain swatch keeps blur disabled', id('r-blur').disabled, true);
 id('swatches').querySelectorAll('.swatch')[1].click();   // 第一个内置渐变
-check('选了渐变预设后模糊恢复可用', id('r-blur').disabled, false);
+check('blur becomes available after picking a preset', id('r-blur').disabled, false);
 id('swatches').querySelectorAll('.swatch')[0].click();   // 还原成默认的"无背景"
 id('sw-wrap').click();
-check('代码块换行可关', document.body.dataset.codeWrap, 'off');
+check('code wrapping can be turned off', document.body.dataset.codeWrap, 'off');
 id('sw-wrap').click();
 
-console.log('8) 侧栏：一个滚动容器、两区共享，收起与拉出');
-check('文档区与目录区同时存在', id('pane-docs').hidden === false && id('pane-toc').hidden === false, true);
-check('两区是同一个滚动容器的孩子', id('pane-docs').parentElement === id('sidebar-body') && id('pane-toc').parentElement === id('sidebar-body'), true);
-check('没有可拖分隔线了', document.querySelector('#sidebar-splitter, .splitter'), null);
-check('没有分段控件了', document.querySelector('[data-stab]'), null);
+console.log('8) sidebar: one scroll container, collapse and pull-out');
+check('both the documents pane and the outline pane exist', id('pane-docs').hidden === false && id('pane-toc').hidden === false, true);
+check('both panes are children of the same scroll container', id('pane-docs').parentElement === id('sidebar-body') && id('pane-toc').parentElement === id('sidebar-body'), true);
+check('no draggable splitter anymore', document.querySelector('#sidebar-splitter, .splitter'), null);
+check('no segmented control anymore', document.querySelector('[data-stab]'), null);
 const bodyOverflow = window.getComputedStyle(id('sidebar-body')).overflowY;
-check('侧栏主体自己滚动（auto/scroll）', bodyOverflow === 'auto' || bodyOverflow === 'scroll', true);
+check('the sidebar body scrolls itself (auto/scroll)', bodyOverflow === 'auto' || bodyOverflow === 'scroll', true);
 const paneOverflow = window.getComputedStyle(id('pane-docs')).overflowY;
-check('文档区不再自己滚动（实际 ' + (paneOverflow || '空') + '）', paneOverflow !== 'auto' && paneOverflow !== 'scroll', true);
-check('侧栏头部不参与滚动', id('sidebar-body').contains(id('btn-collapse')), false);
+check('the documents pane no longer scrolls on its own (actual ' + (paneOverflow || '空') + '）', paneOverflow !== 'auto' && paneOverflow !== 'scroll', true);
+check('the sidebar head does not scroll', id('sidebar-body').contains(id('btn-collapse')), false);
 
-console.log('8b) 目录折叠');
+console.log('8b) outline collapsing');
 const tocBox = id('toc');
 const visibleRows = () => tocBox.querySelectorAll('.toc-row').length;
 const totalHeadings = content.querySelectorAll('h1, h2, h3, h4').length;
-check('目录按层级成了树（有三角的行存在）', tocBox.querySelectorAll('.toc-row .twisty:not(.spacer)').length > 0, true);
-check('三级标题默认折叠起来了', visibleRows() < totalHeadings, true);
+check('the outline is a tree (rows with twisties exist)', tocBox.querySelectorAll('.toc-row .twisty:not(.spacer)').length > 0, true);
+check('h3 entries are collapsed by default', visibleRows() < totalHeadings, true);
 const hiddenRow = [...tocBox.querySelectorAll('.toc-row')].find((row) => row.dataset.target === '三级标题也会出现在目录里');
-check('被折叠的三级标题当前不在目录里', hiddenRow, undefined);
+check('collapsed h3 entries are not listed', hiddenRow, undefined);
 const parentTwisty = [...tocBox.querySelectorAll('.toc-row')].find((row) => row.dataset.target === '代码块').querySelector('.twisty');
 parentTwisty.click();
-check('展开后三级标题出现了', [...tocBox.querySelectorAll('.toc-row')].some((row) => row.dataset.target === '三级标题也会出现在目录里'), true);
-check('展开三角不会触发跳转', decode(window.location.hash) === '' || decode(window.location.hash) === '#数学公式', true);
+check('expanding reveals the h3 entries', [...tocBox.querySelectorAll('.toc-row')].some((row) => row.dataset.target === '三级标题也会出现在目录里'), true);
+check('clicking the twisty does not jump', decode(window.location.hash) === '' || decode(window.location.hash) === '#数学公式', true);
 parentTwisty.click();
-check('再点一次收起', [...tocBox.querySelectorAll('.toc-row')].some((row) => row.dataset.target === '三级标题也会出现在目录里'), false);
+check('clicking again collapses', [...tocBox.querySelectorAll('.toc-row')].some((row) => row.dataset.target === '三级标题也会出现在目录里'), false);
 
-check('侧栏默认展开 → 拉出按钮藏着', document.body.dataset.sidebar, 'open');
+check('sidebar starts open → 拉出按钮藏着', document.body.dataset.sidebar, 'open');
 id('btn-collapse').click();
-check('侧栏可收起', document.body.dataset.sidebar, 'closed');
-check('收起后拉出按钮出现（小圆）', id('btn-sidebar').classList.contains('sidebar-pull'), true);
+check('the sidebar can be collapsed', document.body.dataset.sidebar, 'closed');
+check('the pull-out circle appears', id('btn-sidebar').classList.contains('sidebar-pull'), true);
 id('btn-sidebar').click();
-check('点小圆可展开', document.body.dataset.sidebar, 'open');
+check('clicking the circle expands again', document.body.dataset.sidebar, 'open');
 document.querySelector('[data-theme="system"]').click();
 key('t');
-check('快捷键 T 切主题（跟随系统→浅色）', document.body.hasAttribute('data-ds-dark-theme'), false);
+check('T cycles the theme (system -> light)', document.body.hasAttribute('data-ds-dark-theme'), false);
 key('t');
-check('再按一次 T 进深色', document.body.hasAttribute('data-ds-dark-theme'), true);
+check('T again goes dark', document.body.hasAttribute('data-ds-dark-theme'), true);
 document.querySelector('[data-theme="light"]').click();
 
-console.log('9) 多文档与文件树');
+console.log('9) multiple documents and the file tree');
 
 if (useServer) {
   // 先关掉前面打开的示例文档，让这一节从干净的文档列表开始
@@ -348,71 +515,73 @@ if (useServer) {
     id('doc-list').querySelector('.doc-close').click();
     await sleep(100);
   }
-  check('文档列表已清空', id('doc-list').querySelectorAll('.doc-row').length, 0);
+  check('the document list is empty', id('doc-list').querySelectorAll('.doc-row').length, 0);
   // 服务模式：树来自服务器的目录扫描
   const files = [...id('file-tree').querySelectorAll('.tree-row.file')];
-  check('文件树里有文件', files.length > 0, true);
-  check('根目录名已显示', id('root-name').textContent.length > 0, true);
+  check('the file tree has files', files.length > 0, true);
+  check('the root name is shown', id('root-name').textContent.length > 0, true);
   files[0].click();
   await sleep(300);
   const firstTitle = id('doc-title').textContent;
-  check('点文件后进入阅读', document.body.dataset.reading, 'true');
-  check('地址栏带上了 ?file=', window.location.search.startsWith('?file='), true);
+  check('clicking a file starts reading', document.body.dataset.reading, 'true');
+  check('the URL carries ?file=', window.location.search.startsWith('?file='), true);
   // 展开一个子目录，找第二个文件
   const dir = id('file-tree').querySelector('.tree-row.dir');
   if (dir !== null) { dir.click(); await sleep(80) }
   const other = [...id('file-tree').querySelectorAll('.tree-row.file')].find((row) => row.dataset.path !== files[0].dataset.path);
-  check('树里至少有两个可选文件', other !== undefined, true);
+  check('at least two files in the tree', other !== undefined, true);
   if (other !== undefined) { other.click(); await sleep(300) }
-  check('打开了两个文档', id('doc-list').querySelectorAll('.doc-row').length >= 2, true);
+  check('two documents are open', id('doc-list').querySelectorAll('.doc-row').length >= 2, true);
   key('1', { altKey: true });
   await sleep(150);
-  check('Alt+1 回到第一个文档', id('doc-title').textContent, firstTitle);
+  check('Alt+1 goes back to the first document', id('doc-title').textContent, firstTitle);
   key(']', { altKey: true });
   await sleep(150);
-  check('Alt+] 切到下一个', id('doc-title').textContent !== firstTitle, true);
+  check('Alt+] switches to the next', id('doc-title').textContent !== firstTitle, true);
 } else {
   // 静态模式：模拟浏览器的"选了一个文件夹"——点按钮 → 给 #folder-input 喂一批 File → 触发 change
   id('btn-open-folder').click();
+  // openDirectory 现在是异步的（会先问一句"托盘在不在"），等它走到"弹选择框"那一步再喂文件
+  await sleep(250);
   const folderInput = id('folder-input');
   Object.defineProperty(folderInput, 'files', { value: window.__FAKE_FOLDER__, configurable: true });
   folderInput.dispatchEvent(new window.Event('change', { bubbles: true }));
   await sleep(300);
-  check('根目录显示出来了', id('root-name').textContent, 'notes');
-  check('选过文件夹后，空状态改推荐"从左侧选择"', id('card-browse').hidden, false);
+  check('the root name shows up', id('root-name').textContent, 'notes');
+  check('after picking a folder the empty state points to the left list', id('card-browse').hidden, false);
   // 「选完文件夹什么都没发生」曾经是真实反馈：中间那段说明必须改口，别让人以为没反应
-  check('中间说明改口成"去左边挑一篇"', id('empty-sub').textContent.includes('左侧已经列出'), true);
+  check('the middle text now points to the left list', id('empty-sub').textContent.includes('左侧已经列出'), true);
   // 假目录里是 a.md 和 sub/b.md，一共 2 篇（示例文档不算在里面）
-  check('底部提示报出找到几篇', id('toast').textContent.includes('找到 2 个 markdown 文件'), true);
-  check('折叠时只显示顶层文件', id('file-tree').querySelectorAll('.tree-row.file').length, 1);
-  check('有一个可折叠目录', id('file-tree').querySelectorAll('.tree-row.dir').length, 1);
+  check('the footer reports how many were found', id('toast').textContent.includes('找到 2 个 markdown 文件'), true);
+  check('collapsed: only top-level files are shown', id('file-tree').querySelectorAll('.tree-row.file').length, 1);
+  check('there is a collapsible folder', id('file-tree').querySelectorAll('.tree-row.dir').length, 1);
   id('file-tree').querySelector('.tree-row.file').click();
   await sleep(200);
-  check('打开第一个文件', id('doc-title').textContent, 'a.md');
+  check('open the first file', id('doc-title').textContent, 'a.md');
   id('file-tree').querySelector('.tree-row.dir').click();
   await sleep(80);
-  check('展开目录后看到子文件', id('file-tree').querySelectorAll('.tree-row.file').length, 2);
+  check('expanding shows the nested file', id('file-tree').querySelectorAll('.tree-row.file').length, 2);
   const second = [...id('file-tree').querySelectorAll('.tree-row.file')].find((row) => row.dataset.path === 'sub/b.md');
   second.click();
   await sleep(200);
-  check('打开第二个文件', id('doc-title').textContent, 'b.md');
-  check('打开文档累计 3 个（含示例）', id('doc-list').querySelectorAll('.doc-row').length, 3);
-  check('当前项只有一个高亮', id('doc-list').querySelectorAll('.doc-row.active').length, 1);
+  check('open the second file', id('doc-title').textContent, 'b.md');
+  check('three documents open in total (sample included)', id('doc-list').querySelectorAll('.doc-row').length, 3);
+  check('exactly one item is highlighted', id('doc-list').querySelectorAll('.doc-row.active').length, 1);
   key('1', { altKey: true });
   await sleep(150);
-  check('Alt+1 跳到第一个文档', id('doc-title').textContent, 'sample.md');
+  check('Alt+1 jumps to the first document', id('doc-title').textContent, 'sample.md');
   key(']', { altKey: true });
   await sleep(150);
-  check('Alt+] 跳到下一个', id('doc-title').textContent, 'a.md');
+  check('Alt+] jumps to the next', id('doc-title').textContent, 'a.md');
   id('doc-list').querySelector('.doc-row.active .doc-close').click();
   await sleep(200);
-  check('关闭后剩 2 个', id('doc-list').querySelectorAll('.doc-row').length, 2);
-  check('关闭当前项后自动切到邻居', id('doc-title').textContent, 'b.md');
+  check('two left after closing', id('doc-list').querySelectorAll('.doc-row').length, 2);
+  check('closing the current item switches to its neighbor', id('doc-title').textContent, 'b.md');
 }
 
 if (useServer) {
   // 每个用例单独开一个页面，假装浏览器里存着老设置，验证迁移规则
-  console.log('12) 老设置的迁移（v4 ← 老键）');
+  console.log('12) migrating old settings (v4 <- legacy keys)');
   const cases = [
     { legacy: { bgMode: 'preset', bgPreset: 'aurora' }, expect: 'none', label: '存着老默认背景（极光）→ 跟着新默认改成"无背景"' },
     { legacy: { bgMode: 'preset', bgPreset: 'ocean' }, expect: 'preset', label: '自己挑过背景（海盐）→ 保持不动' },
@@ -440,11 +609,19 @@ if (useServer) {
   }
 }
 
-console.log('');
-if (problems.length > 0) {
-  console.log('运行期问题（' + problems.length + '）：');
-  for (const item of problems.slice(0, 8)) console.log('  - ' + item);
+/**
+ * 收工：打印运行期问题与结论，关掉测试用的服务，按失败数决定退出码。
+ * （单文件模式在它自己那组检查结束后就调用它，不往下跑共享的那一整套。）
+ */
+function finish() {
+  console.log('');
+  if (problems.length > 0) {
+    console.log('runtime problems (' + problems.length + '）：');
+    for (const item of problems.slice(0, 8)) console.log('  - ' + item);
+  }
+  console.log(failures === 0 ? 'all checks passed' : String(failures) + ' check(s) failed');
+  if (server !== null) server.kill();
+  process.exit(failures === 0 ? 0 : 1);
 }
-console.log(failures === 0 ? '全部通过' : '有 ' + failures + ' 项失败');
-if (server !== null) server.kill();
-process.exit(failures === 0 ? 0 : 1);
+
+finish();

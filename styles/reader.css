@@ -107,6 +107,17 @@ body {
   box-sizing: border-box;
 }
 
+/*
+  hidden 属性必须真的"不显示"。
+  浏览器默认规则是 [hidden] { display: none }，但它住在**浏览器样式表**里，优先级最低——
+  我们自己的 .tree { display: flex } 这种规则会把它盖掉，于是 hidden 形同虚设。
+  这个坑踩过两次（左侧"文件夹那一行"和"文件树"），所以在这里一次性按死：
+  凡是带 hidden 的元素，一律不显示。
+*/
+[hidden] {
+  display: none !important;
+}
+
 html {
   height: 100%;
   /* 平滑滚动交给 JS 控制（要按标题偏移），避免和 scroll-behavior 打架 */
@@ -438,6 +449,27 @@ body[data-sidebar='closed'] .sidebar {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Workspace 与"打开的文档"之间：和"打开的文档 / 本页目录"之间同一条分割线（数值也对齐 .pane-toc） */
+#open-docs-label {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* 文件树与"打开的文档"各自限高、超高自己滚：否则一棵大树会把下面的目录区挤没。
+   具体数值在 styles/tuning.css 里（--tree-max-h / --doclist-max-h）。 */
+.tree {
+  max-height: var(--tree-max-h, 38vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#doc-list {
+  max-height: var(--doclist-max-h, 26vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .sidebar-body {

@@ -59,13 +59,6 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
           </button>
         </div>
-        <div class="root-line" id="root-line" hidden>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>
-          <span class="root-name" id="root-name"></span>
-          <button class="icon-btn tiny" id="btn-open-folder" type="button" title="打开文件夹（服务模式下根目录由启动参数决定）" aria-label="打开文件夹">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
-          </button>
-        </div>
       </div>
 
       <!-- 侧栏主体：上下两个区，中间一条可拖动的分隔线 -->
@@ -77,10 +70,20 @@
             <span>打开文件</span>
             <span class="kbd-hint">Ctrl+O</span>
           </button>
+          <!-- Workspace：当前打开的文件夹。标题行与"打开的文档""本页目录"同样式；
+               下面那一行只显示文件夹名字，右边那个 ＋ 是唯一的按钮（打开/换一个文件夹）。 -->
+          <div class="section-label">Workspace</div>
+          <div class="root-line" id="root-line">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>
+            <span class="root-name" id="root-name"></span>
+            <button class="icon-btn tiny" id="btn-open-folder" type="button" title="打开文件夹" aria-label="打开文件夹">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
+            </button>
+          </div>
+          <div class="tree" id="file-tree"></div>
+
           <div class="section-label" id="open-docs-label" hidden>打开的文档</div>
           <div class="list" id="doc-list"></div>
-          <div class="section-label" id="files-label" hidden>全部文件</div>
-          <div class="tree" id="file-tree"></div>
           <div class="sidebar-empty" id="docs-empty">拖入 .md 文件，或点上面的「打开文件」</div>
         </div>
 
@@ -165,7 +168,7 @@
         </div>
 
         <!-- 卡片的补充说明：放成卡片下面单独一行小灰字，别塞进卡片里（会撑高卡片、影响那一行卡片的排版） -->
-        <p class="empty-note">目录特别大时（比如代码仓库），由于浏览器的读取方式，HTML模式下直接打开整个文件夹会无法读取，建议改用服务模式打开。</p>
+        <p class="empty-note" id="empty-note">目录特别大时（比如代码仓库），由于浏览器的读取方式，HTML模式下直接打开整个文件夹会无法读取，建议改用服务模式打开。</p>
 
         <div class="empty-foot">
           <button class="btn" id="btn-sample" type="button">看一篇示例</button>
@@ -215,6 +218,7 @@
     <div class="segmented wide pop-tabs" role="tablist" aria-label="设置分类">
       <button type="button" data-ptab="type" role="tab" aria-pressed="true">排版</button>
       <button type="button" data-ptab="bg" role="tab" aria-pressed="false">背景</button>
+      <button type="button" data-ptab="act" role="tab" aria-pressed="false" id="tab-act" hidden>行为</button>
     </div>
 
     <div class="pop-pane" id="pop-type">
@@ -253,6 +257,24 @@
         <input class="range" id="r-glass" type="range" min="0.2" max="0.95" step="0.01" aria-label="玻璃面板不透明度">
       </div>
       <p class="pop-note" id="bg-note">深色模式下遮罩会自动加强，保证正文对比度。</p>
+    </div>
+
+    <!-- 行为：只在服务模式（双击 md 打开阅读器）下才有意义，别的模式整页收起来 -->
+    <div class="pop-pane" id="pop-act" hidden>
+      <div class="pop-row">
+        <span class="label">双击 md 时新开标签页</span>
+        <button class="switch" id="sw-opentab" type="button" role="switch" aria-pressed="false" aria-label="双击 md 时新开标签页"></button>
+      </div>
+      <p class="pop-note">关着（默认）：双击打开的文件交给已经开着的阅读器标签页（左侧「打开的文档」里能切回去）；打开：每双击一次就新开一个浏览器标签。</p>
+      <div class="pop-row">
+        <span class="label">高级</span>
+        <button class="btn tiny" id="btn-advanced" type="button" aria-expanded="false">展开</button>
+      </div>
+      <div class="field" id="advanced-body" hidden>
+        <div class="field-head"><span class="label">扫描时忽略的文件夹名</span><span class="hint-inline">一行一个</span></div>
+        <textarea class="text-area" id="skip-dirs" rows="6" spellcheck="false" autocomplete="off" placeholder="node_modules&#10;.git&#10;dist"></textarea>
+        <p class="pop-note">扫描文件夹时跳过这些目录（以 . 开头的目录本来就跳过）。改完自动保存，服务端扫描和浏览器读取都按它来。</p>
+      </div>
     </div>
 
     <div class="pop-foot">
