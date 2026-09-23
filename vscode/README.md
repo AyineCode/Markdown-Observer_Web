@@ -31,11 +31,14 @@ webview 里跑的就是仓库根目录那套前端（`index.html` + `js/app.js` 
 
     tools/vscode/
     ├── build.mjs                 组装（加 --package 再打 .vsix）
-    └── smoke.mjs                 在 jsdom 里把 webview 整个跑一遍
+    ├── smoke.mjs                 在 jsdom 里把 webview 跑一遍 + 在假 VSCode 里把扩展本体跑一遍
+    └── audit.mjs                 在真浏览器里按编辑器窗口尺寸量排版（--shot 还能截图）
 
 ## 常用命令
 
     node tools/vscode/build.mjs             # 组装到 build/vscode/pkg/
+node tools/vscode/audit.mjs --shot      # 量排版 + 截图（查"滚动条贴不贴边"这类问题）
+node tools/vscode/audit.mjs             # 只量不算图
     node tools/vscode/smoke.mjs             # 自测（先组装一次）
     node tools/vscode/build.mjs --package   # 打出 build/vscode/markdown-observer-v<版本>.vsix
 

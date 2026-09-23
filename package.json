@@ -3,10 +3,12 @@
   "private": true,
   "description": "本地 markdown 阅读器。注意：版本号来自 git tag（见 tools/version.mjs），这里不重复写，免得两处对不上。",
   "scripts": {
-    "smoke": "node tools/smoke.mjs",
-    "release": "node tools/release.mjs",
     "build": "node tools/build-all.mjs",
-    "build:all": "node tools/build-all.mjs --with-tests"
+    "build:all": "node tools/build-all.mjs --with-tests",
+    "test": "node tools/build-all.mjs --only test-default test-server test-single test-standalone test-vscode",
+    "audit": "node tools/vscode/audit.mjs",
+    "smoke": "node tools/smoke.mjs",
+    "release": "node tools/release.mjs"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0",

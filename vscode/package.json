@@ -123,5 +123,10 @@
         }
       }
     }
+  },
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ayine/md-reader.git"
   }
 }

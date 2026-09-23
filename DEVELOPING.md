@@ -133,6 +133,7 @@ md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Ob
 │   ├── release.mjs           打成发布 zip（零依赖，自己写的 zip）
 │   ├── check-styles.mjs      保真度与 CSS 变量校验
 │   ├── smoke.mjs             用 jsdom 把整个应用跑一遍（默认 / --server / --single / --standalone）
+│   ├── build-all.mjs         一次打出所有产物（步骤表可插拔；一步失败不影响其它；最后统一汇总）
 │   ├── version.mjs           版本号的唯一来源（读 git tag）
 │   ├── vscode/               插件构建与自测：build.mjs（组装 + 打 .vsix）、smoke.mjs（jsdom 里跑 webview）
 │   ├── measure.html / math-probe.html / folder-probe.html / pixel-probe.html   量算与探针页
@@ -152,6 +153,9 @@ md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Ob
 npm install              # 只有一个依赖：jsdom（自测用）
 node tools/smoke.mjs     # 跑一遍自测（四种模式）
 node tools/vscode/smoke.mjs   # 插件的自测（先 node tools/vscode/build.mjs 组装一次）
+npm run build            # 一次打出**所有**产物（build/ 下）：单文件版、分享包、zip、两个 Windows 安装包、插件
+npm test                 # 五套自测（每套独立进程；一套挂了不挡后面的，最后统一汇总）
+npm run audit            # 在真浏览器里量编辑器外壳的排版（滚动条贴不贴边、谁压住谁）
 node tools/release.mjs   # 想构建产物：全落进 build/
 ```
 

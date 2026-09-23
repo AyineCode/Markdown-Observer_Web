@@ -77,8 +77,9 @@ const testSteps = ['', '--server', '--single', '--standalone'].map((mode) => ({
   name: 'test' + (mode === '' ? '-default' : mode.replace('--', '-')),
   title: '自测 node tools/smoke.mjs ' + mode,
   run: [process.execPath, ['tools/smoke.mjs', ...(mode === '' ? [] : [mode])]],
+  offByDefault: true,   // 平时不跑；--with-tests 或 --only test-xxx 才跑
 }));
-testSteps.push({ name: 'test-vscode', title: '自测 node tools/vscode/smoke.mjs', run: [process.execPath, ['tools/vscode/smoke.mjs']] });
+testSteps.push({ name: 'test-vscode', title: '自测 node tools/vscode/smoke.mjs', run: [process.execPath, ['tools/vscode/smoke.mjs']], offByDefault: true });
 
 /*
   ── 产物清单 ────────────────────────────────────────────────────────────
@@ -102,7 +103,7 @@ const STEPS = [
     run: () => [process.execPath, ['tools/win/make-package.mjs', '--node', ARM64_NODE]],
   },
   { name: 'vscode', title: 'VS Code 插件（.vsix）', run: [process.execPath, ['tools/vscode/build.mjs', '--package']] },
-  ...(process.argv.includes('--with-tests') ? testSteps : []),
+  ...testSteps,
 ];
 
 // ── 参数 ────────────────────────────────────────────────────────────────
@@ -119,7 +120,12 @@ if (args.includes('--list')) {
   process.exit(0);
 }
 
-const chosen = STEPS.filter((step) => (only.length === 0 || only.includes(step.name)) && !skip.includes(step.name));
+const withTests = args.includes('--with-tests');
+const chosen = STEPS.filter((step) => {
+  if (skip.includes(step.name)) return false;
+  if (only.length > 0) return only.includes(step.name);      // 点名就跑（自测也能点名）
+  return !(step.offByDefault === true && !withTests);         // 没点名时，自测要 --with-tests
+});
 if (chosen.length === 0) {
   console.error('没有要跑的步骤（检查 --only/--skip 的名字，用 --list 看）');
   process.exit(1);

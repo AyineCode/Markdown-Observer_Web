@@ -37,6 +37,7 @@ function ship(rel, to = rel) {
 }
 // ① 插件自己的代码
 ship('vscode/src', 'src')
+ship('vscode/icon.png', 'icon.png')   // 市场列表里显示的那个图标（128×128 PNG）
 // ② 应用本体（webview 里跑的就是它）——全部装进 media/ 下，保持仓库里的相对关系，
 //    这样 index.html 里的 styles/… js/… vendor/… 相对路径原样有效
 ship('js', 'media/js')
