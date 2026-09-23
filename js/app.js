@@ -401,6 +401,9 @@
     //   · 背景本身更不能等——库慢或不可用时，图也得立刻铺上去。
     rememberBackground({ kind: 'image', key });
     applyBackground();
+    // 交给宿主存一份（编辑器插件里 webview 的 IndexedDB 不保证留得住，
+    // 存到扩展那边下次打开才能还回来）。浏览器宿主没有这个方法，自然跳过。
+    if (typeof host.saveBackgroundImage === 'function') void host.saveBackgroundImage(bgImage);
     try {
       await ImageStore.put(key, bgImage);
     } catch {
@@ -456,6 +459,47 @@
       : 'var(--dsw-font-family)');
     document.body.dataset.codeWrap = settings.wrapCode ? 'on' : 'off';
     document.body.dataset.sidebar = settings.sidebar ? 'open' : 'closed';
+  }
+
+  /**
+   * 宿主指定的背景图（编辑器插件里 = VS Code 设置里填的那个路径）。
+   * 刻意不走 IndexedDB：设置本来就在编辑器那边存着，这里只要把图拿来用。
+   * 传空字符串 = 宿主那边把背景图撤了。
+   * @param {string|null} url
+   */
+  function applyHostBackground(url) {
+    if (typeof url === 'string' && url !== '') {
+      bgImage = url;
+      settings.bgMode = 'image';
+    } else if (settings.bgMode === 'image') {
+      settings.bgMode = 'none';
+    }
+    applyBackground();
+  }
+
+  /**
+   * 套用"宿主自带的一组设置"（编辑器插件用：那边把设置放在 VS Code 的设置页里）。
+   * 浏览器模式下宿主没有 settings，这条路径不会走到，行为与以前完全一致。
+   * @param {object} next 只覆盖给了的键；bgImageUrl 是宿主给的背景图地址，不进 settings
+   */
+  function applyHostSettings(next) {
+    const clean = Object.assign({}, next);
+    const hostBackground = Object.prototype.hasOwnProperty.call(clean, 'bgImageUrl') ? clean.bgImageUrl : undefined;
+    // bgImageData = 宿主机里存着的那张图（面板选过的那张）。只在当前确实要用图片背景时套用，
+    // 免得把用户后来选的预设/无背景顶掉。
+    const storedImage = Object.prototype.hasOwnProperty.call(clean, 'bgImageData') ? clean.bgImageData : undefined;
+    delete clean.bgImageUrl;
+    delete clean.bgImageData;
+    Object.assign(settings, clean);
+    if (hostBackground !== undefined) applyHostBackground(hostBackground);
+    else if (typeof storedImage === 'string' && storedImage !== '' && settings.bgMode === 'image') {
+      bgImage = storedImage;
+      applyBackground();
+    }
+    applyTheme();
+    applyReading();
+    applyBackground();
+    syncControls();
   }
 
   // ─────────────────────────── 5. markdown 渲染管线 ───────────────────────────
@@ -1342,6 +1386,9 @@
    */
   async function useHost(next) {
     host = next;
+    // 宿主自带的设置（编辑器插件）：装上去时套用一次，之后跟着它的变化走
+    if (next.settings !== undefined) applyHostSettings(next.settings);
+    if (typeof next.watchSettings === 'function') next.watchSettings(applyHostSettings);
     await reapplyHost();
     // 服务宿主会挂一条长连接：推送"换一篇"靠它，顺便就把心跳轮询替掉了
     if (typeof next.listen === 'function') {
@@ -2305,6 +2352,9 @@
   /** 用"最近使用"里的某一项（预设或图片）当背景。 */
   async function applyRecent(item) {
     if (item.kind === 'preset') {
+      // 先记再应用（和下面图片那条一样）：点"最近使用"里的预设，同样要把它提到最前面。
+      // 这里原来是直接 return，于是"同一个动作两种表现"——图片会跳前排，预设不会。
+      rememberBackground(item);
       settings.bgMode = 'preset';
       settings.bgPreset = item.id;
       saveSettings();
@@ -2578,8 +2628,12 @@
         // 改不了就算了，不影响阅读
       }
     }
-    const info = await detectServer();
-    if (info !== null) {
+    // 编辑器插件里没有本地服务，跳过探测（省一次注定失败的请求）
+    const info = window.__VSCODE_HOST__ !== undefined ? null : await detectServer();
+    if (window.__VSCODE_HOST__ !== undefined) {
+      // 编辑器插件（vscode/）：宿主就是编辑器本身——没有本地服务，也没有地址栏
+      await useHost(window.__VSCODE_HOST__);
+    } else if (info !== null) {
       // 服务模式：根目录由启动参数决定，文件列表、正文、图片都走 HTTP 接口。
       // 地址栏带了 ?root= 的话，这个页面就认那个文件夹当自己的工作区（托盘开的"新工作区"）。
       await useHost(serverHost(info, initial));

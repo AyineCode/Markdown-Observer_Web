@@ -118,6 +118,10 @@ md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Ob
 ├── README.md           用户手册（给读文档的人）
 ├── DEVELOPING.md       本文件
 ├── package.json        只有一个 devDependency（jsdom，自测用）；版本号不写这里（见「版本号只有一个来源」）
+├── vscode/             VS Code 插件：同一个渲染器搬进编辑器（形态、开发、打包见 vscode/README.md）
+│                       ★ 它**不复制**渲染代码：webview 里跑的就是本目录这套前端，
+│                         插件只多一个 media/preview-bridge.js，把编辑器包装成 app.js 的第四个宿主
+├── .vscode/launch.json 按 F5 跑插件的调试配置（指向组装好的 build/vscode/pkg）
 ├── scripts/            启动与停止（古早但还支持的入口）
 │   ├── start.sh / stop.sh        Linux / WSL / macOS
 │   ├── start.bat / stop.bat      Windows（双击）
@@ -130,6 +134,7 @@ md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Ob
 │   ├── check-styles.mjs      保真度与 CSS 变量校验
 │   ├── smoke.mjs             用 jsdom 把整个应用跑一遍（默认 / --server / --single / --standalone）
 │   ├── version.mjs           版本号的唯一来源（读 git tag）
+│   ├── vscode/               插件构建与自测：build.mjs（组装 + 打 .vsix）、smoke.mjs（jsdom 里跑 webview）
 │   ├── measure.html / math-probe.html / folder-probe.html / pixel-probe.html   量算与探针页
 │   ├── pixels.mjs            真截图量像素
 │   └── win/                  Windows 那一摊（托盘、注册表、图标、安装包；详见 tools/win/README.md）
@@ -137,7 +142,7 @@ md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Ob
     ├── standalone/     markdown-observer-v<版本>.html
     ├── share/          分享包（HTML + 说明 + 示例）
     ├── windows/        Markdown-Observer-Installer-v<版本>[-arm64].exe
-    ├── vscode/         markdown-observer-v<版本>.vsix（将来）
+    ├── vscode/         markdown-observer-v<版本>.vsix 与 pkg/（组装好的插件，F5 就用它）
     └── markdown-observer-v<版本>.zip   发布用
 ```
 
@@ -146,6 +151,7 @@ md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Ob
 ```sh
 npm install              # 只有一个依赖：jsdom（自测用）
 node tools/smoke.mjs     # 跑一遍自测（四种模式）
+node tools/vscode/smoke.mjs   # 插件的自测（先 node tools/vscode/build.mjs 组装一次）
 node tools/release.mjs   # 想构建产物：全落进 build/
 ```
 

@@ -47,6 +47,23 @@ node tools/win/uninstall.mjs    # 卸
 
 ---
 
+## VS Code 插件
+
+在编辑器里读：打开 `.md`，按 `Alt+Shift+V`（macOS 是 `Cmd+Shift+V`）就地切换成阅读视图，再按一下切回编辑。
+本页目录、`/` 搜索、图片点击放大、代码块复制、记住读到哪都在；字号、行距、栏宽、背景、深浅色
+在 VS Code 自己的设置页里（搜 "Markdown Observer"，也可以直接写进 `settings.json`）。
+
+装法：从 Release 里下载 `markdown-observer-v<版本>.vsix`，然后在 VS Code 里「扩展 → … → 从 VSIX 安装」，
+或命令行 `code --install-extension markdown-observer-v<版本>.vsix`。
+
+插件和网页版是**同一个渲染器**——观感一致，排版改一处两边都变。
+
+快捷键默认是 `Alt+Shift+V`。想换：`Ctrl+K` `Ctrl+S` 打开键盘快捷方式，搜 `Markdown Observer`，
+双击那一行按下新组合即可（命令名 `markdownObserver.togglePreview`；冲突时在那一页点「记录按键」，
+按一下组合就能看到是谁占着）。
+写进 `keybindings.json` 的话，改键**只要一条**；想让自带的 `Alt+Shift+V` 失效，
+再加一条 `{ "key": "alt+shift+v", "command": "-markdownObserver.togglePreview" }`——减号是"移除键位"，不是第二个按键。
+
 ## 自己启动一个服务
 
 **WSL / Linux / macOS**：进到这个文件夹，

@@ -1,0 +1,92 @@
+/*
+  编辑器插件里的"差分外壳"——只在 data-shell='vscode' 下生效，浏览器版一行都不受影响。
+
+  为什么需要它：编辑器给 webview 的窗口通常比浏览器窄（往往不到 1080px），而且
+  VSCode 会往 webview 里注入自己的一份默认样式。两件事叠加，就会出现"同一个文档
+  在编辑器里和浏览器里长得不一样"。这里把差异一次性抹平：
+   ① 藏掉文件夹树 / 文档列表（文件交给编辑器自己的资源管理器）；
+   ② 侧栏回到自己的栅格列、宽度收到 208px（窄屏下 controls.css 本来会把它变成
+      浮层抽屉：压住正文，吸顶的顶栏又压住它，看着就是一团乱）；
+   ③ 滚动只发生在 .stage 上（否则 html 也会滚，出现两条滚动条，靠内那条看着
+      就像"没贴紧右边"）；
+   ④ 把 VSCode 注入的正文默认样式归零（最典型的是引用块背景色——我们没有给它
+      设过背景，浏览器里就是透明的，编辑器里却有色块）。
+*/
+body[data-shell='vscode'] #pane-docs,
+body[data-shell='vscode'] #doc-list,
+body[data-shell='vscode'] #docs-empty,
+body[data-shell='vscode'] #btn-open-file,
+body[data-shell='vscode'] #root-line,
+/* 「打印 / 导出 PDF」在 webview 里不工作（window.print 在编辑器里没有对应物），
+   与其留一个点了没反应的按钮，不如藏掉——这也是"差分"的一部分。 */
+body[data-shell='vscode'] #btn-print {
+  display: none;
+}
+
+/* ── ② 侧栏：独立一列 + 208px ──
+   注意不能靠 var(--sidebar-w, 208px) 的兜底值：tuning.css 里已经把它定义成 272px 了，
+   兜底永远轮不到。所以这里显式赋值。 */
+body[data-shell='vscode'] .app {
+  --sidebar-w: 208px;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+}
+
+body[data-shell='vscode'][data-sidebar='closed'] .app {
+  --sidebar-w: 0px;
+}
+
+body[data-shell='vscode'] .sidebar {
+  position: relative;
+  top: auto;
+  bottom: auto;
+  left: auto;
+  width: auto;
+  border-radius: 0;
+}
+
+/* 抽屉才需要遮罩；这里侧栏不再浮在正文上，遮罩留着只会把正文压暗 */
+body[data-shell='vscode'] .scrim {
+  display: none;
+}
+
+/* ── ③ 盒子归零 + 滚动锁在 .stage 上 ──
+   两件事一起做：
+
+   · **归零**：VSCode 的默认样式是在我们的样式表**之后**注入的，同优先级的规则它会赢。
+     它给 body 的 margin/padding 会把整个内容盒子往里推——表现就是"侧栏不贴左、
+     滚动条不贴右，两边各留一条缝"。这里用 !important 明确压住：
+     外壳的盒子由我们说了算。（我们的选择器带 body[...] 前缀，优先级也比它高，
+     两道保险。）
+   · **锁滚动**：html 和 body 都锁住，只让 .stage 滚——否则会出现两条滚动条，
+     靠内那条看着就像"没贴紧右边"。html/body 都打了 data-shell，不依赖 :has()。 */
+html[data-shell='vscode'],
+body[data-shell='vscode'] {
+  margin: 0 !important;
+  padding: 0 !important;
+  height: 100%;
+  overflow: hidden;
+}
+
+body[data-shell='vscode'] .app,
+body[data-shell='vscode'] .sidebar,
+body[data-shell='vscode'] .stage {
+  margin: 0;
+}
+
+/* 编辑器里左右留白收一点，正文多用一点宽度 */
+body[data-shell='vscode'] .stage {
+  padding: 12px 14px 32px;
+}
+
+body[data-shell='vscode'] .topbar {
+  top: 8px;
+}
+
+/* ── ④ 归零 VSCode 注入的正文默认样式 ──
+   引用块是唯一一处我们的样式表没有覆盖的元素（markdown.css 只给了左边框和缩进），
+   于是 VSCode 的默认背景就露出来了。这里补一句"透明"，和浏览器版对齐。 */
+body[data-shell='vscode'] .markdown blockquote {
+  /* !important 在这里是必要的：我们不知道 VSCode 注入的那条带不带 !important，
+     带上它两种情况下都能压住，观感才和网页版一致。 */
+  background: transparent !important;
+}

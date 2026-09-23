@@ -91,8 +91,20 @@ console.log('node runtime: ' + nodePath);
 console.log('  ' + (statSync(nodePath).size / 1024 / 1024).toFixed(0) + ' MB, ' + nodeArch + ' → 本次打包标记为 ' + arch);
 
 // 中间产物放 Windows 的临时目录：Windows 程序往 WSL 的 UNC 路径写文件不一定被允许
-const winTemp = execFileSync('cmd.exe', ['/c', 'echo', '%TEMP%'], { encoding: 'utf8' }).replace(/\r?\n/g, '').trim();
+/*
+  所有 Windows 程序（cmd.exe、csc.exe）都要给一个"两边都认"的工作目录。
+
+  原因：从 WSL 里调用它们时，如果当前目录是 WSL 路径，Windows 那边看到的是
+  UNC（\\wsl.localhost\...），而 cmd.exe **拒绝**以 UNC 为当前目录——它连
+  %TEMP% 都取不到。更阴的是它取决于"调用方把 cwd 设成了什么"：
+  手工在终端跑没事，从脚本里跑就炸。
+  用 /mnt/c（WSL 下）或 C:\（Windows 下）：两边都认，而且不需要可写。
+*/
+const winCwd = existsSync('/mnt/c') ? '/mnt/c' : (process.platform === 'win32' ? 'C:\\' : process.cwd());
+
+const winTemp = execFileSync('cmd.exe', ['/c', 'echo', '%TEMP%'], { encoding: 'utf8', cwd: winCwd }).replace(/\r?\n/g, '').trim();
 const winTempSlash = execFileSync('wslpath', ['-u', winTemp], { encoding: 'utf8' }).trim();
+
 const stagingWin = winTemp + '\\markdown-observer-setup.exe';
 const stagingWsl = winTempSlash + '/markdown-observer-setup.exe';
 
@@ -132,12 +144,12 @@ const stampLocal = winTemp + '\\md-observer-version.txt';
 const stampTmp = join(HERE, '.version.tmp');
 writeFileSync(stampTmp, version + '\n');
 try {
-  execFileSync('cmd.exe', ['/c', 'copy', '/y', toWindowsPath(stampTmp), stampLocal], { stdio: 'ignore' });
+  execFileSync('cmd.exe', ['/c', 'copy', '/y', toWindowsPath(stampTmp), stampLocal], { stdio: 'ignore', cwd: winCwd });
 } finally {
   rmSync(stampTmp, { force: true });
 }
 const iconLocal = winTemp + '\\md-observer-icon.ico';
-execFileSync('cmd.exe', ['/c', 'copy', '/y', toWindowsPath(join(HERE, 'markdown-observer.ico')), iconLocal], { stdio: 'ignore' });
+execFileSync('cmd.exe', ['/c', 'copy', '/y', toWindowsPath(join(HERE, 'markdown-observer.ico')), iconLocal], { stdio: 'ignore', cwd: winCwd });
 const csc = findCsc();
 console.log('compiler: ' + csc);
 execFileSync(csc, [
@@ -201,7 +213,16 @@ if (leaks.length > 0) {
 } else {
   console.log('  self-check: 代码里没有构建机路径，目标机零依赖');
 }
-console.log('  node runtime: ' + execFileSync(nodePath, ['--version'], { encoding: 'utf8' }).trim() + '（装到目标机后不需要任何外部依赖）');
+/*
+  打印包里那个 node 的版本号。注意：只有"本机架构 == 包架构"时才执行得起来，
+  交叉打包（在 x64 上出 ARM64 版）时执行它必然 EACCES——那是正常现象，不是错误。
+  以前这里没兜住，于是 windows-arm64 这一步永远失败，而且报错还看不出原因。
+*/
+let runtimeVersion = '版本号略（本机跑不了 ' + nodeArch + ' 的 node，装到对应架构的机器上才跑得起来）';
+try {
+  runtimeVersion = execFileSync(nodePath, ['--version'], { encoding: 'utf8' }).trim();
+} catch { /* 交叉打包：正常现象 */ }
+console.log('  ' + runtimeVersion + '（装到目标机后不需要任何外部依赖）');
 console.log('');
 console.log('done -> ' + output);
 console.log('  payload : ' + (offset / 1024 / 1024).toFixed(1) + ' MB -> packed ' + (packed.length / 1024 / 1024).toFixed(1) + ' MB');

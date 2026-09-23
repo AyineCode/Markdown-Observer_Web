@@ -4,9 +4,12 @@
   "description": "本地 markdown 阅读器。注意：版本号来自 git tag（见 tools/version.mjs），这里不重复写，免得两处对不上。",
   "scripts": {
     "smoke": "node tools/smoke.mjs",
-    "release": "node tools/release.mjs"
+    "release": "node tools/release.mjs",
+    "build": "node tools/build-all.mjs",
+    "build:all": "node tools/build-all.mjs --with-tests"
   },
   "devDependencies": {
+    "@vscode/vsce": "^4.0.0",
     "jsdom": "^30.1.1"
   }
 }

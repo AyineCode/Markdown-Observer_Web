@@ -1,0 +1,127 @@
+{
+  "name": "markdown-observer",
+  "displayName": "Markdown Observer",
+  "description": "安安静静读 markdown：把当前文件渲染成和 DeepSeek Harness 一致的排版，一键在编辑与阅读之间切换。",
+  "version": "0.0.0",
+  "publisher": "ayine",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onCustomEditor:markdownObserver.preview",
+    "onCommand:markdownObserver.togglePreview"
+  ],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "markdownObserver.preview",
+        "displayName": "Markdown Observer 阅读视图",
+        "selector": [
+          {
+            "filenamePattern": "*.{md,markdown,mdown,mkd}"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "markdownObserver.togglePreview",
+        "title": "Markdown Observer: 切换阅读视图 / 编辑",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "markdownObserver.openPreview",
+        "title": "Markdown Observer: 打开阅读视图"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "markdownObserver.togglePreview",
+        "key": "alt+shift+v",
+        "mac": "cmd+shift+v",
+        "when": "resourceLangId == markdown || editorLangId == markdown || activeCustomEditorId == markdownObserver.preview"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "markdownObserver.togglePreview",
+          "when": "resourceLangId == markdown",
+          "group": "navigation@100"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Markdown Observer",
+      "properties": {
+        "markdownObserver.theme": {
+          "type": "string",
+          "enum": [
+            "system",
+            "light",
+            "dark"
+          ],
+          "default": "system",
+          "description": "深浅色：system = 跟随编辑器主题"
+        },
+        "markdownObserver.scale": {
+          "type": "number",
+          "default": 100,
+          "minimum": 85,
+          "maximum": 140,
+          "description": "字号（百分比，100 = 原样）"
+        },
+        "markdownObserver.leading": {
+          "type": "number",
+          "default": 100,
+          "minimum": 80,
+          "maximum": 150,
+          "description": "行距（百分比，100 = 原样）"
+        },
+        "markdownObserver.width": {
+          "type": "number",
+          "default": 748,
+          "minimum": 560,
+          "maximum": 1000,
+          "description": "正文最大宽度（px）"
+        },
+        "markdownObserver.serif": {
+          "type": "boolean",
+          "default": false,
+          "description": "正文用衬线字体"
+        },
+        "markdownObserver.wrapCode": {
+          "type": "boolean",
+          "default": true,
+          "description": "代码块自动换行"
+        },
+        "markdownObserver.background": {
+          "type": "string",
+          "enum": [
+            "none",
+            "preset",
+            "image"
+          ],
+          "default": "none",
+          "description": "背景：none = 无背景，preset = 内置渐变，image = 下面那个图片路径"
+        },
+        "markdownObserver.backgroundPreset": {
+          "type": "string",
+          "default": "aurora",
+          "description": "内置渐变的名字（background = preset 时生效）"
+        },
+        "markdownObserver.backgroundImage": {
+          "type": "string",
+          "default": "",
+          "description": "背景图片的路径（绝对路径，或相对当前文档的路径）；background = image 时生效"
+        }
+      }
+    }
+  }
+}
