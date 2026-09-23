@@ -16,7 +16,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { get as httpGet } from 'node:http';
-import { readFileSync, rmSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 const CHECKOUT = process.env.DSH_CHECKOUT ?? fileURLToPath(new URL('../../deepseek-harness-ayine/', import.meta.url));
@@ -150,14 +150,14 @@ const options = {
 
 // 单文件 HTML 的名字里带版本号（见 tools/version.mjs），所以按前缀找最新的那个
 const standaloneName = useStandalone
-  ? readdirSync(APP).filter((name) => /^markdown-observer(-v[\w.-]+)?\.html$/.test(name))
-      .sort((a, b) => statSync(join(APP, b)).mtimeMs - statSync(join(APP, a)).mtimeMs)[0]
+  ? readdirSync(join(APP, 'build', 'standalone')).filter((name) => /^markdown-observer(-v[\w.-]+)?\.html$/.test(name))
+      .sort((a, b) => statSync(join(APP, 'build', 'standalone', b)).mtimeMs - statSync(join(APP, 'build', 'standalone', a)).mtimeMs)[0]
   : null;
 if (useStandalone && standaloneName === undefined) {
   console.error('没有找到构建好的单文件 HTML：先跑 node tools/build-standalone.mjs');
   process.exit(1);
 }
-const entry = useStandalone ? join(APP, standaloneName) : join(APP, 'index.html');
+const entry = useStandalone ? join(APP, 'build', 'standalone', standaloneName) : join(APP, 'index.html');
 const dom = fromServer
   ? await JSDOM.fromURL('http://127.0.0.1:' + PORT + '/', options)
   : await JSDOM.fromFile(entry, options);

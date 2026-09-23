@@ -1,8 +1,8 @@
 @echo off
 chcp 65001 >nul
-rem 停掉 Markdown Observer的本地服务（按端口找进程，默认 4321）
+rem 停掉 Markdown Observer 的本地服务（按端口找进程；端口固定 47821）
 setlocal enabledelayedexpansion
-set "PORT=4321"
+set "PORT=47821"
 if not "%~1"=="" set "PORT=%~1"
 set FOUND=
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%PORT%" ^| findstr LISTENING') do (

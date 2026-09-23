@@ -15,5 +15,5 @@ const md = readFileSync(join(dir, 'sample.md'), 'utf8')
 const banner = [
   '/* 本文件由 tools/build-sample.mjs 从 sample.md 生成，请不要直接编辑。 */',
 ].join('\n')
-writeFileSync(join(dir, 'sample.js'), banner + '\n' + 'window.__SAMPLE_MD__ = ' + JSON.stringify(md) + ';\n')
+writeFileSync(join(dir, 'js', 'sample.js'), banner + '\n' + 'window.__SAMPLE_MD__ = ' + JSON.stringify(md) + ';\n')
 console.log('sample.js 已更新（' + md.length + ' 字符）')

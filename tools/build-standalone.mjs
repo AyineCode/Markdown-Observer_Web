@@ -10,7 +10,7 @@
  *
  * 跑法：node tools/build-standalone.mjs
  */
-import { readFileSync, writeFileSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { versionTag } from './version.mjs'
@@ -87,7 +87,9 @@ export function buildStandalone() {
   // ③ 标记来源（方便日后一眼看出这是构建产物）
   html = html.replace('<head>', '<head>\n  <!-- 由 tools/build-standalone.mjs 生成（Markdown Observer ${versionTag()}）：所有样式、脚本与字体都已内联，可单文件分发。 -->');
 
-  const path = join(APP, OUT_NAME);
+  const outDir = join(APP, 'build', 'standalone');
+mkdirSync(outDir, { recursive: true });
+const path = join(outDir, OUT_NAME);
   writeFileSync(path, html);
   return { path, bytes: statSync(path).size };
 }

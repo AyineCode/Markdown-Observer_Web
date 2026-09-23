@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { buildStandalone, OUT_NAME } from './build-standalone.mjs'
 
 const APP = dirname(dirname(fileURLToPath(import.meta.url)))
-const OUT_DIR = join(APP, 'share')
+const OUT_DIR = join(APP, 'build', 'share')
 
 /** 给朋友看的说明：不用任何术语，五行讲完。 */
 const NOTE = [
@@ -43,7 +43,7 @@ export function buildShare() {
   rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_DIR, { recursive: true });
 
-  copyFileSync(join(APP, OUT_NAME), join(OUT_DIR, OUT_NAME));
+  copyFileSync(join(APP, 'build', 'standalone', OUT_NAME), join(OUT_DIR, OUT_NAME));
   writeFileSync(join(OUT_DIR, 'HOW-TO-OPEN.txt'), NOTE);
   if (existsSync(join(APP, 'sample.md'))) {
     copyFileSync(join(APP, 'sample.md'), join(OUT_DIR, 'sample.md'));

@@ -15,6 +15,7 @@
 set -e
 
 DIR=$(cd "$(dirname "$0")" && pwd)
+APP_DIR=$(cd "$DIR/.." && pwd)   # 仓库根目录（脚本住在 scripts/ 里）
 PORT=""
 ROOT=$(pwd)
 OPEN=1
@@ -36,22 +37,12 @@ fi
 
 ROOT=$(cd "$ROOT" && pwd)
 # 记录"当前跑着的那一个服务"（PID 端口 目录）：停止脚本与"别起第二个"都靠它
-PID_FILE="$DIR/.markdown-observer.pid"
+PID_FILE="$APP_DIR/.markdown-observer.pid"
 
-# 没指定端口就自己找一个空闲的（从 4321 往上试）
-if [ -z "$PORT" ]; then
-  PORT=$(node -e '
-    const net = require("net")
-    let port = Number(process.env.START_PORT || 4321)
-    const probe = () => {
-      const server = net.createServer()
-      server.once("error", () => { port += 1; probe() })
-      server.once("listening", () => server.close(() => console.log(port)))
-      server.listen(port, "127.0.0.1")
-    }
-    probe()
-  ')
-fi
+# 端口固定：浏览器的设置、背景图、阅读位置都是按"地址含端口"存下来的，
+# 端口一变，用户看到的就是"我的设置全丢了"。端口上已经有自己的服务时，
+# serve.mjs 会把这一篇交给它，不会打架（见 serve.mjs 的 attachToRunning）。
+PORT="${PORT:-47821}"
 URL="http://127.0.0.1:$PORT/"
 
 # 已经在跑？同一个目录就直接复用（避免越起越多），不同目录先停掉旧的
@@ -64,7 +55,7 @@ if [ -f "$PID_FILE" ]; then
       echo "已经有一个服务在跑：PID $OLD_PID，目录 $OLD_ROOT"
       echo "地址：http://127.0.0.1:$OLD_PORT/"
       if [ "$OPEN" = "1" ]; then open_browser "http://127.0.0.1:$OLD_PORT/" || true; fi
-      echo "（想停掉它：./stop.sh）"
+      echo "（想停掉它：scripts/stop.sh）"
       exit 0
     fi
     echo "先停掉旧的服务：PID $OLD_PID，目录 $OLD_ROOT"
@@ -87,7 +78,7 @@ open_browser() {
   return 1
 }
 
-node "$DIR/serve.mjs" "$ROOT" --port "$PORT" &
+node "$APP_DIR/serve.mjs" "$ROOT" --port "$PORT" &
 SERVER_PID=$!
 printf '%s %s %s\n' "$SERVER_PID" "$PORT" "$ROOT" > "$PID_FILE"
 trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -f "$PID_FILE"' EXIT INT TERM

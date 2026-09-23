@@ -2363,7 +2363,7 @@
 
   function openSample() {
     const md = window.__SAMPLE_MD__;
-    if (typeof md !== 'string') { toast('示例文档没找到（sample.js 缺失？）'); return }
+    if (typeof md !== 'string') { toast('示例文档没找到（js/sample.js 缺失？）'); return }
     openDoc(md, { key: 'sample', name: 'sample.md', size: md.length, source: 'sample' });
   }
 

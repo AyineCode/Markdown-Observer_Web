@@ -40,7 +40,7 @@ serve.mjs --file <那篇 md>  起一个只监听 127.0.0.1 的服务，然后自
 | `stop-servers.sh` | 兜底：服务是旧版本（还没有 `/api/quit`）或卡住时，用它硬停。必须通过 `wsl.exe` 起 |
 | `make-icon.py` | 画图标（Pillow 排字体）。`--variants` 出字体对照表。想换图标只动它，或者直接换 .ico |
 | `markdown-observer.ico` | 图标成品（多尺寸），入库；换图标就是换它 |
-| `make-package.mjs` | 打成"双击就能装"的安装程序 → `dist/Markdown-Observer-Installer-v<版本>.exe` |
+| `make-package.mjs` | 打成"双击就能装"的安装程序 → `build/windows/Markdown-Observer-Installer-v<版本>.exe` |
 | `setup.cs` | 安装程序本体（一个 WinForms 小向导），被上面的脚本编译并贴上文件包 |
 
 ### 服务是"常驻后台"，不自己退
@@ -143,7 +143,7 @@ node tools/win/install.mjs                            # 更新注册表里的 De
 ## 打成安装包
 
 ```sh
-node tools/win/make-package.mjs                       # → dist/Markdown-Observer-Installer-v<版本>.exe（约 35 MB）
+node tools/win/make-package.mjs                       # → build/windows/Markdown-Observer-Installer-v<版本>.exe（约 35 MB）
 node tools/win/make-package.mjs --node <node.exe>     # 换一个 Node 运行时（默认借本机装的那个）
 ```
 
@@ -199,7 +199,7 @@ python3 -c "import zipfile;z=zipfile.ZipFile('node-arm64.zip');[z.extract(n,'na'
 
 # ② 用它打包（--arch 可以省略：脚本会跟着 node.exe 自己判断）
 node tools/win/make-package.mjs --node na/node-v24.21.0-win-arm64/node.exe
-# → dist/Markdown-Observer-Installer-v1.0.0-arm64.exe
+# → build/windows/Markdown-Observer-Installer-v1.0.0-arm64.exe
 ```
 
 打包时会读 `node.exe` 的 PE 头核对架构：**写着 arm64 却塞了个 x64 的 node，会直接拒绝打包**——

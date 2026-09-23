@@ -21,7 +21,7 @@ import { readVersion, versionTag } from '../version.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = dirname(dirname(HERE));        // 仓库根目录（= 安装后那个目录的样子）
-const DIST = join(APP, 'dist');
+const DIST = join(APP, 'build', 'windows');
 // 版本号的唯一来源（见 tools/version.mjs：读 git tag）
 const version = readVersion();
 
@@ -29,7 +29,6 @@ const version = readVersion();
 const FILES = [
   'index.html',
   'serve.mjs',
-  'js/app.js',
   'styles/base.css', 'styles/controls.css', 'styles/design-platform.css',
   'styles/gradient-shadow-text.css', 'styles/highlight-dsh.css', 'styles/markdown.css',
   'styles/reader.css', 'styles/scrollbar.css', 'styles/shiki.css', 'styles/tuning.css',
@@ -50,7 +49,8 @@ function walk(dir, out = []) {
   }
   return out;
 }
-for (const extra of ['vendor', 'js/lib']) if (existsSync(join(APP, extra))) FILES.push(...walk(join(APP, extra)));
+// js/ 和 vendor/ 整个目录一起收：将来加文件不会漏（sample.js 就是搬进来之后才想起要收的）
+for (const extra of ['js', 'vendor']) if (existsSync(join(APP, extra))) FILES.push(...walk(join(APP, extra)));
 
 // ── Node 运行时：默认借用这台机器上装的那个（同一个版本，不用联网下载）──
 /** 读一个 Windows 可执行文件的架构（就是 PE 头里那个 Machine 字段）。 */

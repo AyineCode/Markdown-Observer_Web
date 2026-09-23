@@ -105,46 +105,50 @@
 
 ## 目录结构
 
-```
+ ```
 md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Observer（见下）
-├── .gitattributes      行尾规则：仓库里一律 LF，Windows 的 .bat 用 CRLF
-├── .gitignore          构建产物 / 运行期文件 / 系统杂物
-├── LICENSE             本项目 MIT（© 2026 AyineCode）
-├── start.sh / stop.sh / start.command / start.bat / stop.bat   启动与停止
+├── .gitattributes / .gitignore / LICENSE / VERSION
 ├── index.html          页面骨架（开发用；单文件版由它构建而来）
-├── markdown-observer.html  构建产物：单文件、可直接分发
-├── share/              给朋友的三件套（HTML + 说明 + 示例；构建产物）
 ├── serve.mjs           本地服务：静态文件 + 目录树 + 文件/图片读取（零依赖，只监听 127.0.0.1）
-├── js/app.js           全部前端逻辑
+├── js/                 前端逻辑 app.js + 内置示例 sample.js（由 sample.md 生成，需入库）
 ├── styles/             dsh 的五张 token 表 + markdown.css（逐条搬运）+ 自己的壳与控件
 │                       ★ tuning.css：外观尺码都在这（改它一个文件就够）
 ├── vendor/             第三方库（本地文件，见 NOTICE.md）+ 各家的许可证原文
-├── sample.md / sample.js  示例文档与其内嵌版本
+├── sample.md           内置示例的源（→ js/sample.js）
 ├── README.md           用户手册（给读文档的人）
 ├── DEVELOPING.md       本文件
-└── tools/
-    ├── build-standalone.mjs  构建单文件 HTML
-    ├── build-share.mjs       生成 share/ 分享包
-    ├── release.mjs           打成 markdown-observer-v<版本>.zip（零依赖，自己写的 zip）
-    ├── build-sample.mjs      由 sample.md 生成 sample.js
-    ├── check-styles.mjs      保真度与 CSS 变量校验
-    ├── smoke.mjs             用 jsdom 把整个应用跑一遍
-    ├── measure.html          量算页：打印各按钮在浅/深色下的最终颜色
-    ├── math-probe.html       量公式：字体加载没有、几何尺寸对不对（?src= 指定量哪一页）
-    ├── folder-probe.html     量"打开文件夹"：直接喂一批假 File，跑完打印树/提示/文案
-    ├── pixel-probe.html      像素探针页：给截图量像素用
-    ├── pixels.mjs            真截图量像素：背景透不透、凸感在不在、切换看不看得出
-    └── win/                  Windows 那一摊（「打开方式」、托盘、注册表、图标、安装包）
-        ├── launcher.cs           总管：双击 .md 时被调起来 / 托盘后台（C# 5，用系统自带 csc 编）
-        ├── build-launcher.mjs    编译它（顺带把图标嵌进去）
-        ├── install.mjs           装：写配置 + 注册表 + 开始菜单快捷方式（两种模式：WSL / 原生）
-        ├── uninstall.mjs         卸（命令行这条路；「设置 → 应用」走的是 exe 自带的那条）
-        ├── make-icon.py          画图标（Pillow）
-        ├── make-package.mjs      打成「双击就能装」的安装程序 → dist/
-        ├── setup.cs              安装程序本体（WinForms 小向导）
-        ├── status.mjs / stop-servers.sh   隔端口问状态 / 兜底硬停
-        └── run-server.sh         WSL 这边的服务入口
+├── package.json        只有一个 devDependency（jsdom，自测用）；版本号不写这里（见「版本号只有一个来源」）
+├── scripts/            启动与停止（古早但还支持的入口）
+│   ├── start.sh / stop.sh        Linux / WSL / macOS
+│   ├── start.bat / stop.bat      Windows（双击）
+│   └── start.command             macOS（双击）
+├── tools/              构建、自测、探针
+│   ├── build-standalone.mjs  构建单文件 HTML
+│   ├── build-share.mjs       生成分享包
+│   ├── build-sample.mjs      由 sample.md 生成 js/sample.js
+│   ├── release.mjs           打成发布 zip（零依赖，自己写的 zip）
+│   ├── check-styles.mjs      保真度与 CSS 变量校验
+│   ├── smoke.mjs             用 jsdom 把整个应用跑一遍（默认 / --server / --single / --standalone）
+│   ├── version.mjs           版本号的唯一来源（读 git tag）
+│   ├── measure.html / math-probe.html / folder-probe.html / pixel-probe.html   量算与探针页
+│   ├── pixels.mjs            真截图量像素
+│   └── win/                  Windows 那一摊（托盘、注册表、图标、安装包；详见 tools/win/README.md）
+└── build/              所有产物，一行 .gitignore 全挡掉
+    ├── standalone/     markdown-observer-v<版本>.html
+    ├── share/          分享包（HTML + 说明 + 示例）
+    ├── windows/        Markdown-Observer-Installer-v<版本>[-arm64].exe
+    ├── vscode/         markdown-observer-v<版本>.vsix（将来）
+    └── markdown-observer-v<版本>.zip   发布用
 ```
+
+## 第一次上手（新克隆的仓库）
+
+```sh
+npm install              # 只有一个依赖：jsdom（自测用）
+node tools/smoke.mjs     # 跑一遍自测（四种模式）
+node tools/release.mjs   # 想构建产物：全落进 build/
+```
+
 
 ## 自测
 
@@ -173,7 +177,7 @@ READER_URL=http://127.0.0.1:4322 node tools/pixels.mjs     # 想量你正在用�
 不写 `src` 就量开发页，两者数值应当**完全一致**：
 
 ```sh
-chrome --headless=new --dump-dom "http://127.0.0.1:4321/tools/math-probe.html?src=/markdown-observer.html"
+chrome --headless=new --dump-dom "http://127.0.0.1:47821/tools/math-probe.html?src=/markdown-observer.html"
 ```
 
 「打开文件夹」会弹系统对话框，无头浏览器点不了。`tools/folder-probe.html` 的做法是**直接把一批带 `webkitRelativePath` 的 File 喂给 `#folder-input` 并触发 `change`**——这正是用户真的选完一个文件夹之后，浏览器交给页面的东西。然后打印根目录名、树行数、提示文字、中间那段说明。场景用 `?case=normal|empty|huge` 选（正常两层目录 / 一个 md 都没有 / 超过 3000 篇上限），`?src=` 指定测哪一页（`../index.html` 是开发页，`markdown-observer.html` 是打包版）。
@@ -182,7 +186,7 @@ chrome --headless=new --dump-dom "http://127.0.0.1:4321/tools/math-probe.html?sr
 
 ```sh
 ./start.sh . --no-open &
-chrome --headless=new --dump-dom "http://127.0.0.1:4321/tools/folder-probe.html?src=../index.html&case=normal"
+chrome --headless=new --dump-dom "http://127.0.0.1:47821/tools/folder-probe.html?src=../index.html&case=normal"
 ```
 
 要连"双击文件"那种场景一起验（静态模式、`file://`），Windows 侧 Chrome 可以这样直接读 WSL 里的文件：
@@ -226,8 +230,8 @@ tag 本身就是"发布这件事"，所有产物都从这一个函数取名：
 | 单文件 HTML | `markdown-observer-v1.0.0.html` | `tools/build-standalone.mjs` |
 | 分享包 | `share/`（里面的 HTML 同名） | `tools/build-share.mjs` |
 | 发布 zip | `markdown-observer-v1.0.0.zip` | `tools/release.mjs` |
-| Windows 安装包 | `dist/Markdown-Observer-Installer-v1.0.0.exe` | `tools/win/make-package.mjs` |
-| Windows 安装包（ARM64） | `dist/Markdown-Observer-Installer-v1.0.0-arm64.exe` | 同上，加 `--node <arm64 的 node.exe>`（脚本会核对架构，塞错会拒包） |
+| Windows 安装包 | `build/windows/Markdown-Observer-Installer-v1.0.0.exe` | `tools/win/make-package.mjs` |
+| Windows 安装包（ARM64） | `build/windows/Markdown-Observer-Installer-v1.0.0-arm64.exe` | 同上，加 `--node <arm64 的 node.exe>`（脚本会核对架构，塞错会拒包） |
 | 安装包判断"更新/修复/降级" | 比的就是这个版本号 | `tools/win/setup.cs` |
 | 「设置 → 应用」里显示的版本 | `v1.0.0`（注册表 DisplayVersion） | `tools/win/install.mjs` |
 
@@ -248,7 +252,7 @@ HEAD 不在 tag 上时版本会带 `-dev`（`1.0.0-dev`）——一眼看出这�
 | 源码 | 仓库（git） | 一切都能从这里重建 |
 | 能下载的成品（zip） | **GitHub Release 的附件** | 构建产物不进版本库；附件不占仓库体积，还能按版本回看"哪一版发给过谁" |
 | 单文件版 / `share/` / zip | 本地（`.gitignore` 挡着） | 一条命令就能重建，没必要进库 |
-| Windows 安装程序（`dist/*.exe`） | 本地（`.gitignore` 挡着） | `node tools/win/make-package.mjs` 重建；它自带 Node 运行时，约 35 MB，不适合进库 |
+| Windows 安装程序（`build/windows/*.exe`） | 本地（`.gitignore` 挡着） | `node tools/win/make-package.mjs` 重建；它自带 Node 运行时，约 35 MB，不适合进库 |
 
 **版本号只有一个来源：git tag**（`v1.0.0` → `1.0.0`）。不额外维护 `VERSION` 文件、也不写死在代码里——tag 本身就是"发布这件事"，工具去读它，就不会出现"包里写 1.0.0、tag 是 1.0.1"这种对不上的情况。
 
@@ -336,7 +340,7 @@ jobs:
 ./stop.sh              # 停掉它
 ```
 
-启动时会把自己的 PID、端口、文档目录写进 `.markdown-observer.pid`；`stop.sh` 读它来收工；Ctrl-C 结束也会自动清掉这个文件。所以**不会越起越多**：换个目录再启动，它会先停掉旧的那个。Windows 的 `start.bat` / `stop.bat` 是另一套（固定 4321 端口、`stop.bat` 按端口找进程），它们没入库，属于本机便利脚本。
+启动时会把自己的 PID、端口、文档目录写进仓库根目录的 `.markdown-observer.pid`；`scripts/stop.sh` 读它来收工；Ctrl-C 结束也会自动清掉这个文件。所以**不会越起越多**：换个目录再启动，它会先停掉旧的那个。Windows 那边是 `scripts/start.bat` / `scripts/stop.bat`（后者按端口找进程），端口和其他入口一样固定 47821。这五个脚本都在 `scripts/` 里。
 
 **服务接口**（服务模式下，插件/脚本也能用）
 
@@ -347,7 +351,7 @@ jobs:
 | `GET /api/file?path=…` | 读一个 markdown（返回路径、名称、正文、大小、修改时间） |
 | `GET /api/raw?path=…` | 原样读一个文件（文档里的相对图片就走它） |
 
-**深链接**：`http://127.0.0.1:4321/?file=docs%2Fguide.md#安装` 直接打开某篇文档的某一节。旧的 `#docs/guide.md` 形式也仍然可用。
+**深链接**：`http://127.0.0.1:47821/?file=docs%2Fguide.md#安装` 直接打开某篇文档的某一节。旧的 `#docs/guide.md` 形式也仍然可用。
 
 **想改代码**：`js/app.js` 顶部是设置默认值，`PRESETS` 是内置背景；`styles/tuning.css` 是所有尺码与按钮材质；`styles/controls.css` 最后一节是按钮的统一配方；`styles/markdown.css` 是正文排版（与 dsh 一致的部分，改它前先看 `tools/check-styles.mjs`）；改完 `sample.md` 要跑一次 `node tools/build-sample.mjs`，改完前端要跑一次 `node tools/build-share.mjs`（否则单文件版与 `share/` 还是旧的）。
 

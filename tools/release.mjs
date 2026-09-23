@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { versionTag, writeVersionFile } from './version.mjs';
 
 const APP = dirname(dirname(fileURLToPath(import.meta.url)));
-const SHARE = join(APP, 'share');
+const SHARE = join(APP, 'build', 'share');
 
 // ── zip 需要的两样底层东西：CRC32 和"DOS 时间" ─────────────────────────────
 
@@ -151,7 +151,7 @@ const entries = names.map((name) => {
 });
 
 const tag = versionTag();
-const target = join(APP, 'markdown-observer-' + tag + '.zip');
+const target = join(APP, 'build', 'markdown-observer-' + tag + '.zip');
 const zip = makeZip(entries);
 writeFileSync(target, zip);
 

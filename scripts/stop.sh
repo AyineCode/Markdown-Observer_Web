@@ -3,7 +3,8 @@
 # 停掉由 start.sh 起的那个 Markdown Observer服务。用法： ./stop.sh
 # ─────────────────────────────────────────────────────────────
 DIR=$(cd "$(dirname "$0")" && pwd)
-PID_FILE="$DIR/.markdown-observer.pid"
+APP_DIR=$(cd "$DIR/.." && pwd)
+PID_FILE="$APP_DIR/.markdown-observer.pid"
 
 if [ ! -f "$PID_FILE" ]; then
   echo "没有记录到正在运行的服务（.markdown-observer.pid 不存在）。"

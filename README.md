@@ -39,11 +39,11 @@ node tools/win/uninstall.mjs    # 卸
 
 ## HTML模式
 
-从 Release 里下载 **`markdown-observer-v1.0.0.html`**（名字里的版本号就是你要的那一版），**双击**它（推荐 **Chrome 或 Edge**）。这一个文件自带一切：库、字体全在里面，不用装、不用解压、不用联网。
+从 Release 里下载 **`markdown-observer-v<版本>.html`**（名字里的版本号就是你要的那一版），**双击**它（推荐 **Chrome 或 Edge**）。这一个文件自带一切：库、字体全在里面，不用装、不用解压、不用联网。
 
 然后把 `.md` **拖进窗口**，或者点中间那张「打开文件」卡片。想读一整个文件夹，点「打开文件夹」——左侧立刻长出目录树（连子目录一起读）。
 
-> 这个 HTML 是**生成出来**的，仓库里不带它。要从源码生成：`node tools/build-share.mjs`。
+> 这个 HTML 是**生成出来**的，仓库里不带它。要从源码生成：`node tools/build-share.mjs`（产物在 `build/share/`）。
 
 ---
 
@@ -52,12 +52,12 @@ node tools/win/uninstall.mjs    # 卸
 **WSL / Linux / macOS**：进到这个文件夹，
 
 ```sh
-./start.sh ~/notes      # 读 ~/notes 这个目录（换成你自己的路径）
-./start.sh              # 不带参数 = 读当前目录
-./stop.sh               # 读完停掉
+scripts/start.sh ~/notes      # 读 ~/notes 这个目录（换成你自己的路径）
+scripts/start.sh              # 不带参数 = 读当前目录
+scripts/stop.sh               # 读完停掉
 ```
 
-**Windows**：双击 **`start.bat`**（也可以把要读的文件夹**拖到它上面**）；用完双击 **`stop.bat`**。
+**Windows**：双击 **`scripts/start.bat`**（也可以把要读的文件夹**拖到它上面**）；用完双击 **`scripts/stop.bat`**。
 
 启动器会起一个**只监听本机**的服务，然后打开浏览器，地址是 `http://127.0.0.1:47821/`——**只有你这台电脑能访问**，局域网里别人打不开。
 
@@ -140,9 +140,9 @@ node tools/win/uninstall.mjs    # 卸
 （纯浏览器模式必须把选中的文件夹**整个通读一遍**才能拿到文件，大文件夹会等很久。）
 
 **提示端口被占用 / 服务起不来？**
-`./stop.sh`（Windows 双击 `stop.bat`）停掉旧的再启动。端口固定 47821，服务自己认得出「端口上那个是我自己」，不会打架。
+`scripts/stop.sh`（Windows 双击 `scripts/stop.bat`）停掉旧的再启动。端口固定 47821，服务自己认得出「端口上那个是我自己」，不会打架。
 
-**双击 `start.bat` 一闪而过 / 提示要装 Node.js？**
+**双击 `scripts/start.bat` 一闪而过 / 提示要装 Node.js？**
 装上 [Node.js](https://nodejs.org) 再双击一次；不想装就用那份 HTML。
 
 **怎么知道服务还开着？**

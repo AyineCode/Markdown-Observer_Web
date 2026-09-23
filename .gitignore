@@ -9,13 +9,10 @@
 #  编辑器与系统的杂物
 # ─────────────────────────────────────────────────────────────
 
-markdown-observer.html
-markdown-observer-v*.html
-markdown-observer-v*.zip
-*-v[0-9]*.zip
-share/
+# 所有构建产物都在 build/ 里（单文件 HTML、分享包、Windows 安装包、将来的 vsix、发布 zip）
+build/
 tools/win/*.exe
-dist/
+node_modules/
 tools/win/.argvprobe.*
 
 .markdown-observer.pid
