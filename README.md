@@ -39,7 +39,7 @@ node tools/win/uninstall.mjs    # 卸
 
 ## HTML模式
 
-从 Release 里下载 **`markdown-observer.html`**，**双击**它（推荐 **Chrome 或 Edge**）。这一个文件自带一切：库、字体全在里面，不用装、不用解压、不用联网。
+从 Release 里下载 **`markdown-observer-v1.0.0.html`**（名字里的版本号就是你要的那一版），**双击**它（推荐 **Chrome 或 Edge**）。这一个文件自带一切：库、字体全在里面，不用装、不用解压、不用联网。
 
 然后把 `.md` **拖进窗口**，或者点中间那张「打开文件」卡片。想读一整个文件夹，点「打开文件夹」——左侧立刻长出目录树（连子目录一起读）。
 

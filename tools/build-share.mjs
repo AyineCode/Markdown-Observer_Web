@@ -3,7 +3,7 @@
  * 生成"分享包"：发给不懂计算机的朋友的那一份。
  *
  * 产物（默认在 share/ 目录里，文件名英文、内容中文）：
- *   markdown-observer.html  单文件阅读器，双击即用，不需要装任何东西
+ *   markdown-observer-v<版本>.html  单文件阅读器，双击即用，不需要装任何东西
  *   HOW-TO-OPEN.txt       五行说明，不用命令行
  *   sample.md             让朋友有东西可以马上试
  *
@@ -23,7 +23,7 @@ const OUT_DIR = join(APP, 'share')
 const NOTE = [
   'Markdown Observer · 使用说明',
   '',
-  '1. 双击「markdown-observer.html」就能打开（推荐用 Chrome 或 Edge 浏览器）。',
+  '1. 双击「' + OUT_NAME + '」就能打开（推荐用 Chrome 或 Edge 浏览器）。',
   '2. 把 .md 文件拖进窗口，或者点中间那张「打开文件」的卡片。',
   '3. 想看一整个文件夹里的文档：点「打开文件夹」（子目录会一起读，任何浏览器都行）；',
   '   打开之后，左侧「文档」区里就是这棵目录树。',

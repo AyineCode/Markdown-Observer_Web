@@ -146,12 +146,12 @@ static class Program
             + "请先退出它：右键右下角托盘里的 Markdown Observer 图标 → 「退出」，然后再装一次。");
     }
 
-    /// <summary>包里这一版的构建标记（编成了资源，读起来是瞬时的）。</summary>
-    public static string PayloadStamp()
+    /// <summary>包里这一版的版本号（编成了资源，读起来是瞬时的）。</summary>
+    public static string PayloadVersion()
     {
         try
         {
-            using (Stream stream = typeof(Program).Assembly.GetManifestResourceStream("AppStamp"))
+            using (Stream stream = typeof(Program).Assembly.GetManifestResourceStream("AppVersion"))
             {
                 if (stream == null) return null;
                 using (StreamReader reader = new StreamReader(stream, Encoding.UTF8)) return reader.ReadToEnd().Trim();
@@ -173,12 +173,30 @@ static class Program
         catch { return false; }
     }
 
-    /// <summary>这个目录里装过的那一版是什么时候构建的（没有就是没装过）。</summary>
-    public static string InstalledStamp(string dir)
+    /// <summary>版本号比较：a 比 b 新吗（只看数字段，够用了）。</summary>
+    public static bool IsNewer(string a, string b)
+    {
+        if (b == null) return true;
+        string[] left = a.Split('-')[0].Split('.');
+        string[] right = b.Split('-')[0].Split('.');
+        int count = Math.Max(left.Length, right.Length);
+        for (int i = 0; i < count; i++)
+        {
+            int x = 0;
+            int y = 0;
+            if (i < left.Length) int.TryParse(left[i], out x);
+            if (i < right.Length) int.TryParse(right[i], out y);
+            if (x != y) return x > y;
+        }
+        return false;
+    }
+
+    /// <summary>这个目录里装过的是哪一版（没有就是没装过）。</summary>
+    public static string InstalledVersion(string dir)
     {
         try
         {
-            string file = Path.Combine(dir, "build-stamp.txt");
+            string file = Path.Combine(dir, "version.txt");
             if (File.Exists(file)) return File.ReadAllText(file).Trim();
         }
         catch { }
@@ -369,8 +387,8 @@ class SetupForm : Form
     readonly TextBox dirBox = new TextBox();
     readonly CheckBox autoBox = new CheckBox();
     readonly Button installButton;
-    readonly string previousStamp;
-    readonly string payloadStamp;
+    readonly string installedVersion;
+    readonly string payloadVersion;
     readonly string action;
     bool installed;
     readonly Label status = new Label();
@@ -386,12 +404,14 @@ class SetupForm : Form
             · 装过、包里是新版   → 更新
             · 装过、版本一样     → 修复（用户就是想"再来一遍"，说"更新"会让人以为有新东西）
         */
-        this.previousStamp = Program.InstalledStamp(dir);
-        this.payloadStamp = Program.PayloadStamp();
-        this.installed = previousStamp != null;
-        this.action = previousStamp == null
-            ? "安装"
-            : (payloadStamp != null && payloadStamp != previousStamp ? "更新" : "修复");
+        this.installedVersion = Program.InstalledVersion(dir);
+        this.payloadVersion = Program.PayloadVersion();
+        this.installed = installedVersion != null;
+        if (!installed) action = "安装";
+        else if (payloadVersion != null && Program.IsNewer(payloadVersion, installedVersion)) action = "更新";
+        // 手里这个包比装着的还旧：说清楚，别让人以为是升级
+        else if (payloadVersion != null && Program.IsNewer(installedVersion, payloadVersion)) action = "降级";
+        else action = "修复";
         installButton = Look.MakeButton(action, true);
 
         Text = "Markdown Observer";
@@ -429,8 +449,8 @@ class SetupForm : Form
         before.BackColor = Color.White;
         before.Controls.Add(Look.Header("Markdown Observer",
             installed
-                ? "这台机器上已经装过（" + previousStamp + "），这次是" + action
-                : "安安静静读 markdown 的小工具",
+                ? "已装 v" + installedVersion + "，这个包是 v" + payloadVersion + "，这次是" + action
+                : "安安静静读 markdown 的小工具（v" + payloadVersion + "）",
             Program.AppIcon()));
 
         before.Controls.Add(Caption("安装完成后，双击 .md 即可使用；右键菜单里有「用 Markdown Observer 阅读」；", 24, 108, 9.5f, Look.Ink, false));

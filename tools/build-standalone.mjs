@@ -13,9 +13,11 @@
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { versionTag } from './version.mjs'
 
 const APP = dirname(dirname(fileURLToPath(import.meta.url)))
-export const OUT_NAME = 'markdown-observer.html'
+// 名字里带版本：从"我这份是哪个版本"这个问题上省掉一轮对话
+export const OUT_NAME = 'markdown-observer-' + versionTag() + '.html'
 
 /** 读一个相对 APP 的文件。 */
 const read = (rel) => readFileSync(join(APP, rel), 'utf8')
@@ -83,7 +85,7 @@ export function buildStandalone() {
   });
 
   // ③ 标记来源（方便日后一眼看出这是构建产物）
-  html = html.replace('<head>', '<head>\n  <!-- 由 tools/build-standalone.mjs 生成：所有样式、脚本与字体都已内联，可单文件分发。 -->');
+  html = html.replace('<head>', '<head>\n  <!-- 由 tools/build-standalone.mjs 生成（Markdown Observer ${versionTag()}）：所有样式、脚本与字体都已内联，可单文件分发。 -->');
 
   const path = join(APP, OUT_NAME);
   writeFileSync(path, html);

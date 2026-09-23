@@ -12,7 +12,7 @@
  */
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { get as httpGet } from 'node:http';
@@ -148,7 +148,16 @@ const options = {
   },
 };
 
-const entry = useStandalone ? join(APP, 'markdown-observer.html') : join(APP, 'index.html');
+// 单文件 HTML 的名字里带版本号（见 tools/version.mjs），所以按前缀找最新的那个
+const standaloneName = useStandalone
+  ? readdirSync(APP).filter((name) => /^markdown-observer(-v[\w.-]+)?\.html$/.test(name))
+      .sort((a, b) => statSync(join(APP, b)).mtimeMs - statSync(join(APP, a)).mtimeMs)[0]
+  : null;
+if (useStandalone && standaloneName === undefined) {
+  console.error('没有找到构建好的单文件 HTML：先跑 node tools/build-standalone.mjs');
+  process.exit(1);
+}
+const entry = useStandalone ? join(APP, standaloneName) : join(APP, 'index.html');
 const dom = fromServer
   ? await JSDOM.fromURL('http://127.0.0.1:' + PORT + '/', options)
   : await JSDOM.fromFile(entry, options);
@@ -303,6 +312,20 @@ if (useSingle) {
   finish();
 }
 
+// 版本号只有一个来源（git tag），VERSION 文件是它的生成物——这里核对一次，防止两边漂移
+console.log('0) version consistency');
+{
+  let versionOk = true;
+  let versionText = '';
+  try {
+    versionText = execFileSync(process.execPath, [join(APP, 'tools', 'version.mjs'), '--check'], { encoding: 'utf8' });
+  } catch (error) {
+    versionOk = false;
+    versionText = String(error.stdout ?? '') + String(error.stderr ?? '');
+  }
+  check('the VERSION file matches the git tag', versionOk, true);
+  if (!versionOk) console.log('      ' + versionText.trim());
+}
 console.log('1) libraries and initial state');
 if (useStandalone) {
   check('no external stylesheet links', document.querySelectorAll('link[rel=stylesheet]').length, 0);
@@ -311,7 +334,7 @@ if (useStandalone) {
   check('math fonts are inlined', document.documentElement.innerHTML.includes('data:font/woff2'), true);
   // 回归防线：内联字体时曾经把 src 列表一路吃到右花括号，20 条 @font-face 塌成 2 条，
   // 结果"开发页公式正常、打包出来用回退字体"。条数必须与源文件一致，且不能再引用外部字体。
-  const builtCss = readFileSync(join(APP, 'markdown-observer.html'), 'utf8');
+  const builtCss = readFileSync(entry, 'utf8');
   const sourceK = readFileSync(join(APP, 'vendor', 'katex.min.css'), 'utf8');
   check('built file has at least as many @font-face rules as the source (now ' + (builtCss.match(/@font-face/g) ?? []).length + ' vs ' + (sourceK.match(/@font-face/g) ?? []).length + '）',
     (builtCss.match(/@font-face/g) ?? []).length >= (sourceK.match(/@font-face/g) ?? []).length, true);

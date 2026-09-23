@@ -40,7 +40,7 @@ serve.mjs --file <那篇 md>  起一个只监听 127.0.0.1 的服务，然后自
 | `stop-servers.sh` | 兜底：服务是旧版本（还没有 `/api/quit`）或卡住时，用它硬停。必须通过 `wsl.exe` 起 |
 | `make-icon.py` | 画图标（Pillow 排字体）。`--variants` 出字体对照表。想换图标只动它，或者直接换 .ico |
 | `markdown-observer.ico` | 图标成品（多尺寸），入库；换图标就是换它 |
-| `make-package.mjs` | 打成"双击就能装"的安装程序 → `dist/Markdown-Observer-Installer.exe` |
+| `make-package.mjs` | 打成"双击就能装"的安装程序 → `dist/Markdown-Observer-Installer-v<版本>.exe` |
 | `setup.cs` | 安装程序本体（一个 WinForms 小向导），被上面的脚本编译并贴上文件包 |
 
 ### 服务是"常驻后台"，不自己退
@@ -143,7 +143,7 @@ node tools/win/install.mjs                            # 更新注册表里的 De
 ## 打成安装包
 
 ```sh
-node tools/win/make-package.mjs                       # → dist/Markdown-Observer-Installer.exe（约 35 MB）
+node tools/win/make-package.mjs                       # → dist/Markdown-Observer-Installer-v<版本>.exe（约 35 MB）
 node tools/win/make-package.mjs --node <node.exe>     # 换一个 Node 运行时（默认借本机装的那个）
 ```
 
@@ -187,6 +187,26 @@ node tools/win/make-package.mjs --node <node.exe>     # 换一个 Node 运行时
 3. **换一种分发形态**：不做"单文件自解压"，改成**绿色版 zip**（zip 里放 node.exe + 程序 + 一个安装.exe），
    形状上就从"释放器"变回"一个压缩包"，误报会明显减少——代价是用户要多一步"解压到哪儿"。
 4. 让用户自己在杀软里加白名单（最不推荐，但对熟人小范围够用）。
+
+### 出 ARM64 版
+
+我们自己那两个 exe 都是 `anycpu`（.NET 在 ARM64 上原生跑），跟架构有关的**只有包里那个 `node.exe`**：
+
+```sh
+# ① 拿一份 ARM64 的 node（和 x64 用同一个版本，官方就有）
+curl -L -o node-arm64.zip https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-arm64.zip
+python3 -c "import zipfile;z=zipfile.ZipFile('node-arm64.zip');[z.extract(n,'na') for n in z.namelist() if n.endswith('node.exe')]"
+
+# ② 用它打包（--arch 可以省略：脚本会跟着 node.exe 自己判断）
+node tools/win/make-package.mjs --node na/node-v24.21.0-win-arm64/node.exe
+# → dist/Markdown-Observer-Installer-v1.0.0-arm64.exe
+```
+
+打包时会读 `node.exe` 的 PE 头核对架构：**写着 arm64 却塞了个 x64 的 node，会直接拒绝打包**——
+这种错在开发机上一眼看不出，等别人的 ARM 电脑上才炸，那时候排查很贵。
+
+**实话说清楚**：ARM64 版**没有在真机上验过**（我们手上没有 ARM 设备）。不过 x64 版在 Windows 11 ARM 上
+本来就能跑（走 x64 模拟，只是启动和扫描慢些），所以 ARM64 版是"更快"，不是"不然用不了"。
 
 ## 装 / 卸 / 试
 

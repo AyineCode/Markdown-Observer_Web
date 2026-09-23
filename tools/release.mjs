@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { versionTag, writeVersionFile } from './version.mjs';
 
 const APP = dirname(dirname(fileURLToPath(import.meta.url)));
 const SHARE = join(APP, 'share');
@@ -123,15 +124,11 @@ const args = process.argv.slice(2);
 const noBuild = args.includes('--no-build');
 const explicit = args.find((arg) => !arg.startsWith('-'));
 
-/** 版本号：命令行 > 最近的 git tag > 1.0 */
-function version() {
-  if (explicit !== undefined) return explicit.replace(/^v/, '');
-  try {
-    const tag = execFileSync('git', ['describe', '--tags', '--abbrev=0'], { cwd: APP, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    if (tag !== '') return tag.replace(/^v/, '');
-  } catch { /* 还没有 tag */ }
-  return '1.0';
-}
+// 版本号走 tools/version.mjs（唯一来源）；命令行的那个显式版本顶掉它
+if (explicit !== undefined) process.env.MD_OBSERVER_VERSION = explicit.replace(/^v/, '');
+
+// 发布前把版本号落进 VERSION 文件（它是生成的，别手改）
+if (writeVersionFile()) console.log('  VERSION 文件已更新，记得提交一次');
 
 if (!noBuild) {
   execFileSync(process.execPath, [join(APP, 'tools', 'build-share.mjs')], { cwd: APP, stdio: 'inherit' });
@@ -153,7 +150,7 @@ const entries = names.map((name) => {
   return { name, data: readFileSync(path), mtime: statSync(path).mtime };
 });
 
-const tag = 'v' + version();
+const tag = versionTag();
 const target = join(APP, 'markdown-observer-' + tag + '.zip');
 const zip = makeZip(entries);
 writeFileSync(target, zip);

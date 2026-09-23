@@ -305,9 +305,9 @@ const uninstallKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninst
 console.log('- uninstall entry -> will show up in Settings > Apps');
 regAdd(uninstallKey, 'DisplayName', 'REG_SZ', 'Markdown Observer');
 // 版本就用打包时那个标记（"设置 → 应用"里会显示出来）
-const stampPath = join(installWsl, 'build-stamp.txt');
-if (existsSync(stampPath)) {
-  regAdd(uninstallKey, 'DisplayVersion', 'REG_SZ', readFileSync(stampPath, 'utf8').trim());
+const versionPath = join(installWsl, 'version.txt');
+if (existsSync(versionPath)) {
+  regAdd(uninstallKey, 'DisplayVersion', 'REG_SZ', 'v' + readFileSync(versionPath, 'utf8').trim());
 }
 regAdd(uninstallKey, 'DisplayIcon', 'REG_SZ', exeWin + ',0');
 regAdd(uninstallKey, 'InstallLocation', 'REG_SZ', installWin);

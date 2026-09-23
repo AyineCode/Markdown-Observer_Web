@@ -216,6 +216,29 @@ chrome --headless=new --allow-file-access-from-files --dump-dom \
 > 设置键升级时做过两次迁移，规则都是**只搬"恰好等于老默认值"的那些，自己调过的人原样保留**：
 > `v2 → v3` 把老默认背景（极光）改成「无背景」；`v3 → v4` 把老的面板不透明度 72% 改成 50%。迁移规则集中在 `js/app.js` 的 `migrateSettings()` 里，加一条默认值变更就往那里加一行。
 
+## 版本号只有一个来源：`tools/version.mjs`
+
+它读的是 **git tag**（tag 叫 `v1.0.0` → 版本就是 `1.0.0`）。不维护 VERSION 文件、也不写死在代码里——
+tag 本身就是"发布这件事"，所有产物都从这一个函数取名：
+
+| 产物 | 名字 | 谁生成 |
+|---|---|---|
+| 单文件 HTML | `markdown-observer-v1.0.0.html` | `tools/build-standalone.mjs` |
+| 分享包 | `share/`（里面的 HTML 同名） | `tools/build-share.mjs` |
+| 发布 zip | `markdown-observer-v1.0.0.zip` | `tools/release.mjs` |
+| Windows 安装包 | `dist/Markdown-Observer-Installer-v1.0.0.exe` | `tools/win/make-package.mjs` |
+| Windows 安装包（ARM64） | `dist/Markdown-Observer-Installer-v1.0.0-arm64.exe` | 同上，加 `--node <arm64 的 node.exe>`（脚本会核对架构，塞错会拒包） |
+| 安装包判断"更新/修复/降级" | 比的就是这个版本号 | `tools/win/setup.cs` |
+| 「设置 → 应用」里显示的版本 | `v1.0.0`（注册表 DisplayVersion） | `tools/win/install.mjs` |
+
+仓库里还有一个 `VERSION` 文件，但**它是生成物，不是第二个来源**：内容由 tag 推出来（`node tools/version.mjs --write`，
+发布脚本会自动跑），作用是让**下载源码 zip 的人**（没有 .git，看不到 tag）也知道自己拿到的是哪一版。
+两个来源会漂移的毛病用一条自测堵住：`node tools/version.mjs --check` 会核对文件和 tag 是否一致，smoke 每次都会跑它。
+
+**发新版只要三下**：`git tag v1.1.0` → `node tools/release.mjs`（会顺手更新 VERSION，记得一起提交）→ 上传产物。
+HEAD 不在 tag 上时版本会带 `-dev`（`1.0.0-dev`）——一眼看出这不是发布版。
+临时顶掉（打包测试用，不动仓库）：`MD_OBSERVER_VERSION=1.2.3 node tools/win/make-package.mjs`。
+
 ## 怎么发布
 
 发布要解决的问题只有一个：**让"某个版本"有一个固定的下载地址**。这个仓库的分工是——

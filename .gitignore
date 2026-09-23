@@ -2,7 +2,7 @@
 #  什么不入库（其余全部入库）
 #
 #  构建产物：跑一条命令就能重新产出，没必要进版本库
-#    · markdown-observer.html —— tools/build-standalone.mjs 的产物（单文件版，约 1 MB）
+#    · markdown-observer-v<版本>.html —— tools/build-standalone.mjs 的产物（单文件版，约 1 MB）
 #    · share/                 —— tools/build-share.mjs 的产物（发给朋友的三件套）
 #    · markdown-observer-v*.zip —— tools/release.mjs 的产物（发人 / 挂 GitHub Release 用）
 #  运行期文件：启动服务时写下的进程记录
@@ -10,6 +10,7 @@
 # ─────────────────────────────────────────────────────────────
 
 markdown-observer.html
+markdown-observer-v*.html
 markdown-observer-v*.zip
 *-v[0-9]*.zip
 share/
@@ -25,4 +26,4 @@ Thumbs.db
 desktop.ini
 # 图标挑字体时的对照表（想看就 python3 tools/win/make-icon.py --variants）
 tools/win/icon-fonts.png
-tools/win/.build-stamp.tmp
+tools/win/.version.tmp

@@ -16,10 +16,14 @@ import { deflateRawSync } from 'node:zlib';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// 版本号的唯一来源（git tag，见文件里的说明）
+import { readVersion, versionTag } from '../version.mjs';
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = dirname(dirname(HERE));        // 仓库根目录（= 安装后那个目录的样子）
 const DIST = join(APP, 'dist');
-const OUTPUT_NAME = 'Markdown-Observer-Installer.exe';   // 不带空格也不带中文：命令行和路径都省事
+// 版本号的唯一来源（见 tools/version.mjs：读 git tag）
+const version = readVersion();
 
 // ── 要打进包里的东西（相对仓库根目录）──────────────────────────────────
 const FILES = [
@@ -49,6 +53,20 @@ function walk(dir, out = []) {
 for (const extra of ['vendor', 'js/lib']) if (existsSync(join(APP, extra))) FILES.push(...walk(join(APP, extra)));
 
 // ── Node 运行时：默认借用这台机器上装的那个（同一个版本，不用联网下载）──
+/** 读一个 Windows 可执行文件的架构（就是 PE 头里那个 Machine 字段）。 */
+function peArch(file) {
+  const data = readFileSync(file);
+  if (data.length < 0x40 || data.toString('ascii', 0, 2) !== 'MZ') return null;
+  const peOffset = data.readUInt32LE(0x3c);
+  if (data.toString('ascii', peOffset, peOffset + 4) !== 'PE\0\0') return null;
+  const machine = data.readUInt16LE(peOffset + 4);
+  if (machine === 0x8664) return 'x64';
+  if (machine === 0xaa64) return 'arm64';
+  if (machine === 0x14c) return 'x86';
+  return 'unknown(0x' + machine.toString(16) + ')';
+}
+
+const archArg = process.argv.includes('--arch') ? process.argv[process.argv.indexOf('--arch') + 1] : null;
 const nodeArg = process.argv.indexOf('--node');
 const nodePath = nodeArg >= 0 && process.argv[nodeArg + 1] !== undefined
   ? process.argv[nodeArg + 1]
@@ -58,7 +76,19 @@ if (!existsSync(nodePath)) {
   console.error('用 --node <路径> 指定一个（Windows 上装了 Node 就有）。');
   process.exit(1);
 }
-console.log('node runtime: ' + nodePath + ' (' + (statSync(nodePath).size / 1024 / 1024).toFixed(0) + ' MB)');
+const nodeArch = peArch(nodePath);
+/*
+  架构核对。默认跟着 node.exe 走，也可以用 --arch 显式指定；
+  两者对不上就直接拒绝打包——"arm64 版里装了个 x64 的 node"这种错，
+  在开发机上完全看不出来，等到别人的 ARM 电脑上才炸，那时候排查成本极高。
+*/
+const arch = archArg ?? nodeArch;
+if (archArg !== null && nodeArch !== archArg) {
+  console.error('✗ node.exe 是 ' + nodeArch + ' 的，和 --arch ' + archArg + ' 对不上，拒绝打包');
+  process.exit(1);
+}
+console.log('node runtime: ' + nodePath);
+console.log('  ' + (statSync(nodePath).size / 1024 / 1024).toFixed(0) + ' MB, ' + nodeArch + ' → 本次打包标记为 ' + arch);
 
 // 中间产物放 Windows 的临时目录：Windows 程序往 WSL 的 UNC 路径写文件不一定被允许
 const winTemp = execFileSync('cmd.exe', ['/c', 'echo', '%TEMP%'], { encoding: 'utf8' }).replace(/\r?\n/g, '').trim();
@@ -82,12 +112,14 @@ const nodeSize = statSync(nodePath).size;
 index.push('node.exe\t' + nodeSize + '\t' + offset);
 parts.push(readFileSync(nodePath));
 offset += nodeSize;
-// 版本标记：安装程序靠它判断"这台机器上装过没有、是哪一次构建的"
-const stamp = new Date().toLocaleString('sv-SE').slice(0, 16);
-const stampData = Buffer.from(stamp + '\n', 'utf8');
-index.push('build-stamp.txt\t' + stampData.length + '\t' + offset);
-parts.push(stampData);
-offset += stampData.length;
+/*
+  版本号（唯一来源：tools/version.mjs → git tag）。
+  安装程序靠它判断"装过没有、是更新、修复还是降级"；"设置 → 应用"里显示的也是它。
+*/
+const versionData = Buffer.from(version + '\n', 'utf8');
+index.push('version.txt\t' + versionData.length + '\t' + offset);
+parts.push(versionData);
+offset += versionData.length;
 
 // ── 编 setup.exe ────────────────────────────────────────────────────────
 /*
@@ -96,10 +128,9 @@ offset += stampData.length;
   它会直接失败，窗口就只剩系统默认的空白图标（这个坑踩过）。
   csc 的 /resource: 不认 UNC，所以先用 cmd 把 ico 搬到 Windows 本地临时目录。
 */
-const stampLocal = winTemp + '\\md-observer-stamp.txt';
-// 中间文件放仓库里（/tmp 通过 UNC 不一定能访问，实测 cmd copy 会失败）
-const stampTmp = join(HERE, '.build-stamp.tmp');
-writeFileSync(stampTmp, stamp + '\n');
+const stampLocal = winTemp + '\\md-observer-version.txt';
+const stampTmp = join(HERE, '.version.tmp');
+writeFileSync(stampTmp, version + '\n');
 try {
   execFileSync('cmd.exe', ['/c', 'copy', '/y', toWindowsPath(stampTmp), stampLocal], { stdio: 'ignore' });
 } finally {
@@ -115,7 +146,7 @@ execFileSync(csc, [
   '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
   '/win32icon:' + toWindowsPath(join(HERE, 'markdown-observer.ico')),
   '/resource:' + iconLocal + ',AppIcon',
-  '/resource:' + stampLocal + ',AppStamp',
+  '/resource:' + stampLocal + ',AppVersion',
   toWindowsPath(join(HERE, 'setup.cs')),
 ], { stdio: 'inherit', cwd: winTempSlash });
 
@@ -131,7 +162,9 @@ const lengthField = Buffer.alloc(8);
 lengthField.writeUInt32LE(packed.length, 0);
 const magic = Buffer.from('MDOBSET1', 'ascii');   // 正好 8 字节，和 setup.cs 对得上
 mkdirSync(DIST, { recursive: true });
-const output = join(DIST, OUTPUT_NAME);
+// 名字里带版本和架构；x64 保持原来的样子（大家习惯了这个），别的架构加后缀
+const outputName = 'Markdown-Observer-Installer-v' + version + (arch === 'x64' ? '' : '-' + arch) + '.exe';
+const output = join(DIST, outputName);
 writeFileSync(output, Buffer.concat([base, packed, lengthField, magic]));
 chmodSync(output, 0o755);
 
@@ -172,7 +205,7 @@ console.log('  node runtime: ' + execFileSync(nodePath, ['--version'], { encodin
 console.log('');
 console.log('done -> ' + output);
 console.log('  payload : ' + (offset / 1024 / 1024).toFixed(1) + ' MB -> packed ' + (packed.length / 1024 / 1024).toFixed(1) + ' MB');
-console.log('  installer: ' + (statSync(output).size / 1024 / 1024).toFixed(1) + ' MB, build ' + stamp);
+console.log('  installer: ' + (statSync(output).size / 1024 / 1024).toFixed(1) + ' MB, version ' + versionTag() + ', ' + arch);
 
 function toWindowsPath(p) {
   const match = /^\/mnt\/([a-z])\/(.*)$/.exec(p);
