@@ -10,7 +10,7 @@
  *
  * 跑法：node tools/build-standalone.mjs
  */
-import { mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs'
+import { readdirSync, rmSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { versionTag } from './version.mjs'
@@ -89,6 +89,11 @@ export function buildStandalone() {
 
   const outDir = join(APP, 'build', 'standalone');
 mkdirSync(outDir, { recursive: true });
+// 清掉旧版本的产物：版本号一变（比如从 v1.0.0 到 v1.0.0-dev）目录里就会留一份旧的，
+// 看起来像"构建没生效"，自测里"挑最新那份"也会跟着变得不确定。
+for (const stale of readdirSync(outDir)) {
+  if (/^markdown-observer.*\.html$/.test(stale) && stale !== OUT_NAME) rmSync(join(outDir, stale), { force: true });
+}
 const path = join(outDir, OUT_NAME);
   writeFileSync(path, html);
   return { path, bytes: statSync(path).size };

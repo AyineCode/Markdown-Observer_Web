@@ -16,7 +16,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { get as httpGet } from 'node:http';
-import { readdirSync, readFileSync, rmSync } from 'node:fs';
+import { statSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 const CHECKOUT = process.env.DSH_CHECKOUT ?? fileURLToPath(new URL('../../deepseek-harness-ayine/', import.meta.url));
@@ -338,6 +338,21 @@ if (useStandalone) {
   const sourceK = readFileSync(join(APP, 'vendor', 'katex.min.css'), 'utf8');
   check('built file has at least as many @font-face rules as the source (now ' + (builtCss.match(/@font-face/g) ?? []).length + ' vs ' + (sourceK.match(/@font-face/g) ?? []).length + '）',
     (builtCss.match(/@font-face/g) ?? []).length >= (sourceK.match(/@font-face/g) ?? []).length, true);
+  /*
+    打印/导出 PDF 时只该印正文：界面壳（侧栏、顶栏、浮在角落的设置按钮、设置面板……）
+    必须都藏住。这条断言是为一个真实 bug 写的——浮动在角落的按钮不在正常文档流里，
+    最容易被漏掉，结果纸面上多出一个"设置"。
+
+    注意：整份产物里不止一段 @media print（vendor 的 KaTeX 也有一段），
+    所以要在**所有** print 块里找，而不是只看第一段。
+  */
+  {
+    const printBlocks = [...builtCss.matchAll(/@media print/g)].map((hit) => builtCss.slice(hit.index, hit.index + 1500));
+    const chrome = ['.sidebar', '.topbar', '.progress', '.scrim', '.toast', '.settings-seat', '.popover', '.sidebar-pull'];
+    const missing = chrome.filter((selector) => !printBlocks.some((block) => block.includes(selector)));
+    check('打印样式藏住了所有界面壳（含浮动的设置按钮）', missing.length === 0, true);
+    if (missing.length > 0) console.log('      漏了：' + missing.join(', '));
+  }
   check('built file no longer references external fonts', (builtCss.match(/url\(\s*['"]?fonts\//g) ?? []).length, 0);
 }
 check('marked', typeof window.marked, 'object');

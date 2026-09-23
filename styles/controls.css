@@ -596,8 +596,15 @@ body[data-sidebar='open'] .scrim.visible {
     color: #000;
   }
 
+  /*
+    只打印正文：屏幕上的"壳"一律不出现。
+    注意这里漏过一类——**浮在角落的按钮**（左下角的设置、拉出侧栏的那个、
+    设置面板本身、空状态面板）。它们不在正常文档流里，很容易被忘掉，
+    于是打印出来的纸上就多了个"设置"按钮。（这个 bug 报过）
+  */
   .bg, .sidebar, .topbar, .progress, .scrim, .searchbar, .lightbox, .toast,
-  .drop-hint, .doc-foot .tools, .md-code-block .action {
+  .drop-hint, .doc-foot .tools, .md-code-block .action,
+  .settings-seat, .popover, .sidebar-pull, .empty {
     display: none !important;
   }
 

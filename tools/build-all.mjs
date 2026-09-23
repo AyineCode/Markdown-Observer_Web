@@ -90,6 +90,23 @@ testSteps.push({ name: 'test-vscode', title: '自测 node tools/vscode/smoke.mjs
     prepare  可选，(ctx) => Promise，跑 run 之前的前置（失败即这一步失败）
 */
 const STEPS = [
+  {
+    name: 'clean',
+    title: '清掉上一次的产物（保留 build/tools/ 里的 node 缓存）',
+    // action 是"在进程内干一件事"的步骤；run 才是子进程。两种都支持，加产物时按需选。
+    action: () => {
+      /*
+        为什么默认要清：版本号一变（v1.0.0 → v1.0.0-dev），build/ 里就会新旧并存，
+        人就不知道该拿哪个了。build/tools/ 例外——那是 ARM64 的 node 缓存，
+        32 MB，每次重下太浪费。
+      */
+      const keep = new Set(['tools']);
+      for (const entry of readdirSync(BUILD, { withFileTypes: true })) {
+        if (keep.has(entry.name)) continue;
+        rmSync(join(BUILD, entry.name), { recursive: true, force: true });
+      }
+    },
+  },
   { name: 'sample', title: '内置示例 sample.md → js/sample.js', run: [process.execPath, ['tools/build-sample.mjs']] },
   { name: 'html', title: '单文件 HTML（发给朋友那种）', run: [process.execPath, ['tools/build-standalone.mjs']] },
   { name: 'share', title: '分享包 build/share/', run: [process.execPath, ['tools/build-share.mjs']] },
@@ -141,14 +158,19 @@ for (const step of chosen) {
   const started = Date.now();
   try {
     if (typeof step.prepare === 'function') await step.prepare({});
-    const command = typeof step.run === 'function' ? step.run({}) : step.run;
-    /*
-      刻意**不传 cwd**：从 WSL 里把工作目录设成仓库路径时，Windows 那边看到的是
-      \\wsl.localhost\... （UNC），而 cmd.exe 拒绝把 UNC 当当前目录，
-      打包脚本里那几个 cmd.exe 调用就会 spawn 失败——而手工在终端里跑却没事，
-      极难排查。让子进程继承调用者的工作目录即可，所有步骤用的都是仓库绝对路径。
-    */
-    execFileSync(command[0], command[1], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+    if (typeof step.action === 'function') {
+      // action：在进程内干一件事的步骤（比如 clean）
+      await step.action({});
+    } else {
+      const command = typeof step.run === 'function' ? step.run({}) : step.run;
+      /*
+        刻意**不传 cwd**：从 WSL 里把工作目录设成仓库路径时，Windows 那边看到的是
+        \\wsl.localhost\... （UNC），而 cmd.exe 拒绝把 UNC 当当前目录，
+        打包脚本里那几个 cmd.exe 调用就会 spawn 失败——而手工在终端里跑却没事，
+        极难排查。让子进程继承调用者的工作目录即可，所有步骤用的都是仓库绝对路径。
+      */
+      execFileSync(command[0], command[1], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+    }
     const seconds = (Date.now() - started) / 1000;
     results.push({ step, status: 'ok', seconds });
     console.log('ok（' + seconds.toFixed(1) + 's）');
