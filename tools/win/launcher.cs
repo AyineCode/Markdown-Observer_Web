@@ -49,6 +49,14 @@ static class Launcher
 
     // ── 托盘只留一个：这两个名字全机唯一 --------------------------------------
     const string TrayMutexName = "Local\\MarkdownObserverTray";
+    /**
+     * 托盘独占用的互斥体。**必须存在静态字段里**，不能是局部变量：
+     * 局部变量的最后一次使用（那句 if (!created)）之后，JIT 就认为它死了，
+     * GC 一旦回收，句柄关闭、"独占"随之消失——下一次 EnsureTray 会以为没有托盘，
+     * 于是又拉起一个，而新的那个也能顺利拿到互斥体……结果就是好几个托盘。
+     * 这也解释了它"有时候才出现"：GC 什么时候跑并不确定。（这个坑踩过）
+     */
+    static Mutex trayMutex = null;
     const string QuitEventName = "Local\\MarkdownObserverQuit";
 
     /*
@@ -375,7 +383,19 @@ static class Launcher
     {
         Log("请求服务退出（端口 " + config.Port + "）");
         StopService(config);
-        SignalTrayQuit();
+        /*
+          隔一会儿多喊几声，直到没人应。
+          为什么不能只喊一次：那个退出信号是 AutoReset 事件，**一次只会唤醒一个等待者**；
+          而修复互斥体之前可能已经开出好几个托盘（它们各等各的），一次只送走一个，
+          用户会看到"退不干净、还剩几个"。
+        */
+        for (int i = 0; i < 10; i++)
+        {
+            SignalTrayQuit();
+            Thread.Sleep(400);
+            if (!TrayRunning()) break;
+        }
+        Log("退出请求处理完毕");
         return 0;
     }
 
@@ -1077,8 +1097,12 @@ static class Launcher
     static int RunTray(string configPath)
     {
         bool created;
-        Mutex mutex = new Mutex(true, TrayMutexName, out created);
-        if (!created) return 0;   // 已经有一个托盘在跑了
+        trayMutex = new Mutex(true, TrayMutexName, out created);
+        if (!created)
+        {
+            Log("已经有一个托盘在跑，本实例直接退出");
+            return 0;
+        }
 
         Config config = Config.Load(configPath);
         SilentMode = config.Silent;
@@ -1151,8 +1175,22 @@ static class Launcher
         {
             quitEvent.WaitOne();
             Log("收到退出信号");
-            icon.Visible = false;
-            Application.Exit();
+            try
+            {
+                // 一定要回 UI 线程：NotifyIcon 靠窗口消息，在别的线程上设 Visible=false 不一定生效，
+                // 那样图标就留在通知区（"幽灵图标"）。顺手 Dispose 掉。
+                trayHost.BeginInvoke((MethodInvoker)delegate
+                {
+                    icon.Visible = false;
+                    icon.Dispose();
+                    Application.Exit();
+                });
+            }
+            catch (Exception error)
+            {
+                Log("退出时摘图标失败：" + error.Message);
+                Application.Exit();
+            }
         });
         waiter.IsBackground = true;
         waiter.Start();
