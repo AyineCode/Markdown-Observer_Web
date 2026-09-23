@@ -231,6 +231,24 @@ if (useSingle) {
   check('switched to the pushed file', id('doc-title').textContent, 'DEVELOPING.md');
   check('two documents in the sidebar list now', id('doc-list').querySelectorAll('.doc-row').length, 2);
   // 工作区是"每个页面自己的事"：没有 ?root= 的页面不该凭空长出一棵别人的树
+  // 文档里的相对 .md 链接必须在阅读器里打开：
+  // 以前没接住 → 浏览器去请求那个文件 → "点一下下载了个文件"，而且页面被导航走、长连接断掉，
+  // 服务端从此以为没人在看，之后每次打开都新开标签页（设置怎么调都没用）。
+  console.log('5a) a relative .md link opens inside the reader');
+  const link = [...id('doc').querySelectorAll('.markdown a')].find((a) => (a.getAttribute('href') || '').endsWith('.md'));
+  check('the sample has a relative .md link', link !== undefined, true);
+  if (link !== undefined) {
+    const before = id('doc-title').textContent;
+    link.click();
+    await sleep(400);
+    check('clicking it switched the document in place', id('doc-title').textContent !== before, true);
+    check('and the address bar follows it', window.location.search.includes('file='), true);
+  }
+  // 设置面板里那条说明文字的实际间距（用户反馈"和上面那行之间空了一大块"）
+  const noteStyle = window.getComputedStyle(window.document.querySelector('#pop-act .pop-note'));
+  // 说明文字和上面那行控件之间不该有大空档（曾经是 margin 12 + padding 12 = 24px，太松）
+  check('the note sits right under the switch', noteStyle.marginTop, '12px');
+  check('and adds no extra padding of its own', parseFloat(noteStyle.paddingTop), 0);
   console.log('5b) a page without ?root= has no workspace of its own');
   check('no tree on a single-file page', id('file-tree').querySelectorAll('.row').length, 0);
   check('the folder row stays empty', id('root-name').textContent, '');
@@ -260,6 +278,9 @@ if (useSingle) {
   await sleep(400);
   const pref = await (await fetch('http://127.0.0.1:' + PORT + '/api/pref')).json();
   check('the switch saved to the server', pref.openMode, 'tab');
+  // 开机自启由托盘管：测试环境里没有托盘，这一项应该整行收起来（而不是给一个按了没反应的开关）
+  await sleep(250);
+  check('the auto-start row is hidden when the tray is not running', id('row-autostart').hidden, true);
   const opened2 = await (await fetch('http://127.0.0.1:' + PORT + '/api/open?path=' + encodeURIComponent(other))).json();
   check('after switching to new-tab a new tab opens even with a page connected', opened2.mode, 'tab');
   console.log('7) a second workspace (what the tray menu opens)');

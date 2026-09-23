@@ -13,7 +13,8 @@ markdown-observer.html
 markdown-observer-v*.zip
 *-v[0-9]*.zip
 share/
-tools/win/MarkdownObserver.exe
+tools/win/*.exe
+dist/
 tools/win/.argvprobe.*
 
 .markdown-observer.pid
@@ -22,3 +23,6 @@ tools/win/.argvprobe.*
 .DS_Store
 Thumbs.db
 desktop.ini
+# 图标挑字体时的对照表（想看就 python3 tools/win/make-icon.py --variants）
+tools/win/icon-fonts.png
+tools/win/.build-stamp.tmp

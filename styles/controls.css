@@ -786,8 +786,6 @@ body[data-sidebar='open'] .scrim.visible {
 
 /* 说明文字钉在面板底部：内容不满时那是一块刻意的留白，而不是没画完 */
 .pop-note {
-  margin-top: auto;
-  padding-top: 12px;
   margin: 12px 0 0;
   font-size: 11px;
   line-height: 17px;

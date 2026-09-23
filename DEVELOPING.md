@@ -54,7 +54,7 @@
 
 第 1、2 档的模糊是**下限**（默认 14px，`--btn-glass-blur`）：低于 8px 玻璃感会消失、字也容易糊。浏览器不支持 `backdrop-filter` 时，这几档退回 dsh 原本那种"实心但干净"的底色，可读性优先；第 0 档本来就是透明的，不受影响。所有数值（含深色主题那几个）都在 `styles/tuning.css`，出厂值在 `styles/reader.css`——**删掉 tuning.css 里的一行就回到出厂值**。
 
-## 七个踩过的坑（都写成了注释 + 断言）
+## 八个踩过的坑（都写成了注释 + 断言）
 
 **1. 通用类名会撞车。** 「最近使用」里的空格子原本叫 `.recent.empty`，而 `.empty` 是**空状态那个大面板**的类名（上面挂着 `max-width: 760px`、`margin: 5vh auto 0`、`padding: 46px 44px 34px`、`border-radius: 24px`）。于是占位格子被撑开、又被 5vh 的外边距顶到下一行——看上去就是"背景和占位边框不在同一行"。现在叫 `.recent.slot`（见 `styles/controls.css`），smoke 里加了 `slot.matches('.empty') === false` 这条断言防复发。**教训：面板级的类名要够特别，别用 `.empty`、`.box` 这种。**
 
@@ -69,6 +69,8 @@
 **6. `void someAsyncFn()` 会把整条链路的异常吞掉。** 「打开文件夹」曾经是 `void openDirectory()`：用户点完、选完文件夹，只要后面任何一步抛错（权限、坏条目、遍历中途被删），就成了一个没人处理的 Promise 拒绝——**页面上一点动静都没有**，用户报的是「没反应」，而这句话几乎无法定位。现在整段 `try/catch` 兜住并把错误名说出来（`NotAllowedError` 这种就是权限），遍历的每一层也各自兜住并计数（一层读不动只跳过那一层，最后提示「有 N 处读不到，已跳过」），另外大目录会先弹一句「正在读…」、文件数封顶 3000。`tools/folder-probe.html` 能把这四种情况都跑一遍：`?case=normal|partial|denied|nopicker`。**教训：`void` 一个异步函数之前，先给它一个「一定会说话」的失败路径。**
 
 **7. `showDirectoryPicker()` 在 `file://` 页面上会卡住。** 「打开文件夹」原本用的是 File System Access：`typeof window.showDirectoryPicker === 'function'`（`file://` 下确实存在）、`isSecureContext === true`、页面也没有任何报错——可用户选完文件夹之后**连第一句提示都没出现**。原因是这个 promise 在 `file://` 源上不落地：系统对话框弹得出来、用户也能选，但 `await` 之后那行代码永远不执行，整条链路静默卡死。（把 `showDirectoryPicker` 换成假句柄时一切正常，正是这一点把嫌疑指向真实 API，而不是我们自己的代码。）现在改用 `<input type="file" webkitdirectory multiple>`：浏览器直接把整个目录（含子目录）的文件交给页面，Chrome / Edge / Firefox / Safari 都支持，`file://` 也照常，而且拿到的是 File 对象，读正文与图片都更直接。**教训：能在 `file://` 下用的能力，才是「双击就能用」的本机工具能用的能力；用系统对话框类 API 之前，先在最苛刻的那种打开方式里验一遍。**
+
+**8. 没被接住的链接会把整页导航走，然后"设置就失效了"。** 文档里写 `[README](README.md)` 这种**相对 .md 链接**时，链接处理只认 `http(s)` 和 `#` 两种，于是浏览器自己去请求那个 `.md`——用户看到的是"点一下下载了一个文件"。真正的麻烦在后面：**页面被导航走了**，而服务端判断"还有没有人在看"靠的就是那条 SSE 长连接，于是它从此认为没人在看，之后每次打开都开新标签页（复用得有个页面可复用），用户报的是**"设置里怎么调都没用"**——听起来像设置坏了，其实设置根本没参与决策。定位靠的是启动器日志里那行 `"listeners":0` 的突变。现在 `.md` 链接一律接住、在阅读器里就地打开（相对路径按当前文档所在目录解析），smoke 里加了"点它 → 文档就地切换 + 地址栏跟着走"这条断言。**教训：凡是"服务端靠连接数判断状态"的设计，都要问一句"这个页面有没有可能被导航走"；以及，用户报的现象和真正的原因可以隔得很远，先看日志里哪个数字变了。**
 
 ## 设置为什么放在那里
 
@@ -131,7 +133,17 @@ md-reader/              ← 目录名保持 md-reader；产品名是 Markdown Ob
     ├── math-probe.html       量公式：字体加载没有、几何尺寸对不对（?src= 指定量哪一页）
     ├── folder-probe.html     量"打开文件夹"：直接喂一批假 File，跑完打印树/提示/文案
     ├── pixel-probe.html      像素探针页：给截图量像素用
-    └── pixels.mjs            真截图量像素：背景透不透、凸感在不在、切换看不看得出
+    ├── pixels.mjs            真截图量像素：背景透不透、凸感在不在、切换看不看得出
+    └── win/                  Windows 那一摊（「打开方式」、托盘、注册表、图标、安装包）
+        ├── launcher.cs           总管：双击 .md 时被调起来 / 托盘后台（C# 5，用系统自带 csc 编）
+        ├── build-launcher.mjs    编译它（顺带把图标嵌进去）
+        ├── install.mjs           装：写配置 + 注册表 + 开始菜单快捷方式（两种模式：WSL / 原生）
+        ├── uninstall.mjs         卸（命令行这条路；「设置 → 应用」走的是 exe 自带的那条）
+        ├── make-icon.py          画图标（Pillow）
+        ├── make-package.mjs      打成「双击就能装」的安装程序 → dist/
+        ├── setup.cs              安装程序本体（WinForms 小向导）
+        ├── status.mjs / stop-servers.sh   隔端口问状态 / 兜底硬停
+        └── run-server.sh         WSL 这边的服务入口
 ```
 
 ## 自测
@@ -213,6 +225,7 @@ chrome --headless=new --allow-file-access-from-files --dump-dom \
 | 源码 | 仓库（git） | 一切都能从这里重建 |
 | 能下载的成品（zip） | **GitHub Release 的附件** | 构建产物不进版本库；附件不占仓库体积，还能按版本回看"哪一版发给过谁" |
 | 单文件版 / `share/` / zip | 本地（`.gitignore` 挡着） | 一条命令就能重建，没必要进库 |
+| Windows 安装程序（`dist/*.exe`） | 本地（`.gitignore` 挡着） | `node tools/win/make-package.mjs` 重建；它自带 Node 运行时，约 35 MB，不适合进库 |
 
 **版本号只有一个来源：git tag**（`v1.0.0` → `1.0.0`）。不额外维护 `VERSION` 文件、也不写死在代码里——tag 本身就是"发布这件事"，工具去读它，就不会出现"包里写 1.0.0、tag 是 1.0.1"这种对不上的情况。
 
@@ -314,6 +327,22 @@ jobs:
 **深链接**：`http://127.0.0.1:4321/?file=docs%2Fguide.md#安装` 直接打开某篇文档的某一节。旧的 `#docs/guide.md` 形式也仍然可用。
 
 **想改代码**：`js/app.js` 顶部是设置默认值，`PRESETS` 是内置背景；`styles/tuning.css` 是所有尺码与按钮材质；`styles/controls.css` 最后一节是按钮的统一配方；`styles/markdown.css` 是正文排版（与 dsh 一致的部分，改它前先看 `tools/check-styles.mjs`）；改完 `sample.md` 要跑一次 `node tools/build-sample.mjs`，改完前端要跑一次 `node tools/build-share.mjs`（否则单文件版与 `share/` 还是旧的）。
+
+## 安全边界
+
+本机工具最容易忽略的就是这一块，所以集中写清楚：
+
+| 边界 | 怎么做的 |
+|---|---|
+| 只监听本机 | 服务绑 `127.0.0.1`，局域网里别人打不开 |
+| 防 DNS rebinding | 每个请求都检查 `Host` 头，不是 `127.0.0.1:端口` / `localhost:端口` 一律 403 |
+| 不读任意文件 | 白名单 `ROOTS`：只有「打开过的文件所在目录」才让读。**在阅读器里打开过的文档也算打开过**（否则点开 A 目录里的一篇、再点它里面的链接就跳不动了）；已有的高层目录能覆盖就不重复记 |
+| 防跨站请求伪造 | `/api/open`、`/api/root`、`/api/pref`、`/api/quit` 这些**会改变状态**的接口，带 `Origin` 且不是我们自己的一律 403。跨站读不到响应（不发 CORS 头），但动作会真的发生，所以要挡 |
+| 托盘的小接口 | 同样只认我们自己的页面（以前回 `Access-Control-Allow-Origin: *`，那等于任何网站都能让用户的浏览器去改开机自启，已经改掉） |
+| 不联网 | 页面不发任何外部请求；库、字体、公式全在本地 |
+| 文档里的 HTML | 渲染前过 DOMPurify，脚本、事件属性、危险标签都清掉 |
+
+改这块之前先看一眼上表：**每一条都是有意为之的**，不是随手写的。
 
 ## 已知限制
 

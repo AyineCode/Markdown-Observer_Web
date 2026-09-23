@@ -31,13 +31,17 @@ serve.mjs --file <那篇 md>  起一个只监听 127.0.0.1 的服务，然后自
 | 文件 | 干什么 |
 |---|---|
 | `launcher.cs` | **总管**源码：既是"打开方式"被调起来的程序，也是右下角那个托盘。C# 5 写法（见下） |
-| `build-launcher.mjs` | 编译它 → `MarkdownObserver.exe`（约 10 KB） |
+| `build-launcher.mjs` | 编译它 → `MarkdownObserver.exe`（约 65 KB，含图标） |
 | `MarkdownObserver.exe` | 编译产物，不入库 |
 | `run-server.sh` | **本机开发用**：WSL 这边的入口，负责找到 node 再 exec serve.mjs |
 | `install.mjs` | 装：编译启动器 → 复制到 `%LOCALAPPDATA%\MarkdownObserver` → 写注册表 |
 | `uninstall.mjs` | 卸：删注册表 + 删那个目录，一个字不留 |
 | `status.mjs` | 隔着端口问一句"服务在不在、在读哪篇"，`--stop` 让它退出（走 `/api/quit`） |
 | `stop-servers.sh` | 兜底：服务是旧版本（还没有 `/api/quit`）或卡住时，用它硬停。必须通过 `wsl.exe` 起 |
+| `make-icon.py` | 画图标（Pillow 排字体）。`--variants` 出字体对照表。想换图标只动它，或者直接换 .ico |
+| `markdown-observer.ico` | 图标成品（多尺寸），入库；换图标就是换它 |
+| `make-package.mjs` | 打成"双击就能装"的安装程序 → `dist/Markdown-Observer-Installer.exe` |
+| `setup.cs` | 安装程序本体（一个 WinForms 小向导），被上面的脚本编译并贴上文件包 |
 
 ### 服务是"常驻后台"，不自己退
 
@@ -115,6 +119,75 @@ localhost（反过来 Windows → WSL 可以）。托盘拿到的是 Windows 路
 
 老式对话框（`SHBrowseForFolder`）**已经整条删掉**了：不为省一点等待就弹一个老气窗口。
 
+## 图标
+
+一个来源，处处生效：**图标只存在于 `markdown-observer.ico`**，编译时用 `/win32icon` 嵌进 exe，
+托盘那个图标也是运行时从 exe 自己身上取的（`Icon.ExtractAssociatedIcon`）——所以换一次就够，
+任务管理器、资源管理器、托盘、"打开方式"列表全跟着变。
+
+```sh
+python3 tools/win/make-icon.py                        # 用 make-icon.py 顶部的 FONT / 配色重新生成
+python3 tools/win/make-icon.py --variants             # 生成字体对照表（挑字体用）
+python3 tools/win/make-icon.py --font <字体.ttf>       # 临时换一个字体看看
+node tools/win/build-launcher.mjs                     # 把图标编进 exe
+node tools/win/install.mjs                            # 更新注册表里的 DefaultIcon
+```
+
+改配色就看 `make-icon.py` 顶上那四行（`BG_TOP`/`BG_BOTTOM` 是方块的上下渐变，`INK_TOP`/`INK_BOTTOM` 是 M 的），
+改形状就看 `INSET`（留边）、`CORNER`（圆角）、`INK_SCALE`（字多大）、`STROKE`（描边加粗，太大就糊）。
+也可以直接拿自己的多尺寸 `.ico` 覆盖 `markdown-observer.ico`，连 Python 都不用。
+
+**一个改不了的**：后台服务进程（`node.exe`）在任务管理器里显示的是 Node 自己的图标——
+图标是编在可执行文件里的，改别人的 exe 不现实。
+
+## 打成安装包
+
+```sh
+node tools/win/make-package.mjs                       # → dist/Markdown-Observer-Installer.exe（约 35 MB）
+node tools/win/make-package.mjs --node <node.exe>     # 换一个 Node 运行时（默认借本机装的那个）
+```
+
+一个 exe，自带 Node 运行时，目标电脑**什么都不用装**。它长这样：
+
+```
+[用 csc 编出来的 setup.exe][压缩后的文件包][8 字节长度][8 字节魔数 "MDOBSET1"]
+```
+
+运行时读自己的尾巴 → 解开 → 落到安装目录 → 用包里自带的 `node.exe` 跑 `tools/win/install.mjs`。
+**安装逻辑只有 install.mjs 那一份**，安装程序只是个壳——不然两处迟早不一致。
+
+装完那一页只给说明，不摆按钮：**Windows 不允许程序自己抢默认**，得用户右键一个 .md → 打开方式 → 选择其他应用，
+勾「始终」。说明里把这几步写清楚了。
+
+
+静默安装（给脚本/测试用）：
+
+```sh
+"Markdown Observer 安装程序.exe" --silent [--dir <目录>] [--autostart | --no-autostart]
+"Markdown Observer 安装程序.exe" --extract-only <目录>     # 只解包，不写注册表（自测用）
+```
+
+## 杀软误报（先说清楚）
+
+安装包**有一定概率被杀软拦下来**。这不是"写错了什么"，而是这个包的**形状**碰巧是恶意软件的经典形状：
+
+| 我们的做法 | 在启发式引擎眼里像什么 |
+|---|---|
+| exe 尾巴上贴一段压缩数据，运行时解出来 | dropper（释放器） |
+| 包里带 `node.exe` 并执行它 | 恶意软件最常用的宿主之一 |
+| 写 `HKCU\...\Run`（开机自启）、抢文件关联 | 流氓软件的标准动作 |
+| 卸载时 `cmd /c ping & rmdir` 删自己 | 木马自删除的经典写法 |
+| 没有代码签名、全网没人见过这个文件 | 零信誉，直接拦 |
+
+**能做的（按有效性排）**：
+
+1. **把文件提交给微软复核**（免费、通常一两天）：<https://www.microsoft.com/en-us/wdsi/filesubmission>
+   选 "I believe this file is incorrectly detected"，把 exe 传上去。误报一旦确认，Defender 的库会更新。
+2. **代码签名**：买一张 OV/EV 证书给 exe 签名，是根治办法（现在 OV 证书也要配硬件令牌或云 HSM）。
+3. **换一种分发形态**：不做"单文件自解压"，改成**绿色版 zip**（zip 里放 node.exe + 程序 + 一个安装.exe），
+   形状上就从"释放器"变回"一个压缩包"，误报会明显减少——代价是用户要多一步"解压到哪儿"。
+4. 让用户自己在杀软里加白名单（最不推荐，但对熟人小范围够用）。
+
 ## 装 / 卸 / 试
 
 ```sh
@@ -188,3 +261,17 @@ node tools/win/build-launcher.mjs       # 只重编启动器
 11. **别给 DOM 元素起名叫 empty**：程序里 `.empty` 是"空状态面板"，`body[data-reading=true]` 会把它
    藏掉；新加的一行要是不小心也叫 `.empty`，就会"一打开文档就消失"。（这个是 app.js 那边的坑，
    记在这儿免得再犯。）
+12. **打包格式里的"魔数"必须正好是约定的字节数**：我写了 `MDOBSETUP1`（10 个字符），读取时按
+   "最后 8 字节"读——于是长度字段也跟着错位 2 字节，报出来的是**"这个 exe 里没有安装包"**，
+   看起来像文件被改坏了，其实是自己数错了。现在两边都写死 8 字节的 `MDOBSET1`。
+13. **.NET 的 `DeflateStream` 认的是"裸 deflate"**，而 Node 的 `zlib.deflateSync` 会多带 2 字节
+   zlib 头和 Adler 校验——C# 那边一读就炸（`InvalidDataException`）。用 `deflateRawSync`。
+14. **`csc.exe` 的工作目录不能在 UNC 上**：开发机的项目在 `\\wsl.localhost\...` 里，编译器会抱怨
+   `CMD.EXE: UNC 路径不支持`。编译时把 `cwd` 指到一个 Windows 本地目录（比如 `%TEMP%`）。
+   顺带：编译产物也先落到 `%TEMP%` 再读回来，Windows 程序往 WSL 的 UNC 路径写文件不一定被允许。
+15. **网页里"没被接住的链接"= 整页被导航走 = 长连接断掉**：文档里 `[README](README.md)` 这种
+   **相对 .md 链接**一开始没人处理，浏览器就自己去请求那个文件（变成"下载一个文件"），
+   页面随之卸载——而服务端判断"还有没有人在看"靠的就是那条 SSE 长连接，于是它从此认为
+   **没人在看**，之后每次打开都新开标签页（复用得有个页面可复用），用户看到的是
+   **"设置里怎么调都没用"**。现在 `.md` 链接一律接住、在阅读器里就地打开。
+   **教训：凡是"服务端靠连接数判断状态"的设计，都要问一句"这个页面有没有可能被导航走"。**

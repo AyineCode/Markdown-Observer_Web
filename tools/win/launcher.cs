@@ -68,6 +68,10 @@ static class Launcher
     [DllImport("user32.dll")]
     static extern IntPtr GetForegroundWindow();
 
+    /// <summary>告诉资源管理器"文件关联变了"，让它立刻刷新图标（不必等重启或手动刷新）。</summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+    static extern void SHChangeNotify(int eventId, uint flags, IntPtr item1, IntPtr item2);
+
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
@@ -131,10 +135,49 @@ static class Launcher
         return found;
     }
 
+    /// <summary>常见浏览器的主程序名，用来认出"浏览器窗口"。</summary>
+    static readonly string[] BrowserNames = new string[] { "chrome", "msedge", "firefox", "brave", "opera", "vivaldi", "chromium" };
+
+    /**
+     * 找一个浏览器窗口。
+     * 什么时候用：用户切到了**别的标签页**，这时浏览器窗口的标题是他正在看的那个网站，
+     * 里面没有 Markdown Observer —— 光靠标题就认不出阅读器在哪，只能退一步把浏览器叫出来。
+     *
+     * 说清楚一件事：**没有**办法从外部切到某个具体标签页（浏览器的安全规矩）。
+     * 所以能做到的极限是"把浏览器窗口带到前台"，剩下那一下点击得用户自己来。
+     */
+    static IntPtr FindBrowserWindow()
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr hWnd, IntPtr param)
+        {
+            if (!IsWindowVisible(hWnd)) return true;
+            uint pid;
+            GetWindowThreadProcessId(hWnd, out pid);
+            string name;
+            try { name = Process.GetProcessById((int)pid).ProcessName; }
+            catch { return true; }
+            foreach (string browser in BrowserNames)
+            {
+                if (name.IndexOf(browser, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                found = hWnd;
+                return false;   // 找到一个就够
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
     /// <summary>把已经开着的阅读器窗口叫到前台（"双击了但看起来没反应"就是缺这一步）。</summary>
     static void BringReaderToFront()
     {
         IntPtr reader = FindReaderWindow();
+        // 认不出来（多半是切到别的标签页了）→ 把浏览器窗口叫出来，至少让用户一眼看见
+        if (reader == IntPtr.Zero)
+        {
+            reader = FindBrowserWindow();
+            if (reader != IntPtr.Zero) Log("没找到阅读器窗口（大概切到别的标签页了），改叫浏览器窗口");
+        }
         if (reader == IntPtr.Zero) return;
         // 只有窗口"最小化"的时候才还原它。别的什么都别做：
         // 随手调 ShowWindow 会把最大化 / 全屏的浏览器变回一个小窗口（全屏看文档的观感就毁了）。
@@ -179,6 +222,16 @@ static class Launcher
 
             if (!File.Exists(configPath))
             {
+                /*
+                  没有 config.txt —— 这个程序还没装好（安装包是先解包、再写配置的），或者刚被卸载。
+                  控制类命令（退出/看状态/卸载/打开阅读器）这时候什么都不用做，安静退出就好：
+                  以前它们也会弹框，于是"安装到一半突然蹦出个找不到配置文件"（这个坑踩过）。
+                  只有"被人双击"那种调用才值得弹一句提示。
+                */
+                bool controlOnly = args.Length >= 1
+                    && (args[0] == "--quit" || args[0] == "--status" || args[0] == "--uninstall" || args[0] == "--reader");
+                Log("没有配置文件（" + configPath + "），当作还没装：安静退出");
+                if (controlOnly) return 0;
                 Fail("找不到配置文件：\r\n" + configPath + "\r\n\r\n请重新运行一次安装（node tools/win/install.mjs）。");
                 return 3;
             }
@@ -190,6 +243,7 @@ static class Launcher
 
             if (args.Length >= 1 && args[0] == "--quit") return QuitEverything(config);
             if (args.Length >= 1 && args[0] == "--status") return ReportStatus(config);
+            if (args.Length >= 1 && args[0] == "--reader") return OpenReaderMode(config);
             if (args.Length >= 1 && args[0] == "--uninstall") return Uninstall(Path.GetDirectoryName(Application.ExecutablePath));
 
             if (args.Length < 1 || args[0].Length == 0 || args[0].StartsWith("--"))
@@ -541,6 +595,73 @@ static class Launcher
       于是服务端收到网页的请求后，转手来问这里（127.0.0.1:47822）。
     */
     const int TrayPort = 47822;
+    /**
+     * 允许哪个源来调这些小接口。
+     * 以前回的是 Access-Control-Allow-Origin: *，那等于**任何网站**都能让用户的浏览器
+     * 去调 /set-autostart 或弹出选择框（跨站请求伪造）。现在只认我们自己的页面。
+     */
+    static string allowedOrigin = null;
+
+    // ── 开机自启 ─────────────────────────────────────────────────────────
+    /*
+      写在 HKCU...Run 里（当前用户），不需要管理员权限。
+      默认**不开**：设置面板里可以随时开，安装的时候也会问一句。
+      开着的理由只有一个——双击 md 时不用现起后台服务（省 1~2 秒），代价是开机多一个后台进程。
+    */
+    const string RunKey = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    const string RunValue = "Markdown Observer";
+
+    /// <summary>开机自启开着吗？</summary>
+    static bool AutoStartOn()
+    {
+        try
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey, false))
+            {
+                if (key == null) return false;
+                object value = key.GetValue(RunValue);
+                return value != null && Convert.ToString(value).Length > 0;
+            }
+        }
+        catch (Exception error)
+        {
+            Log("读开机自启失败：" + error.Message);
+            return false;
+        }
+    }
+
+    /// <summary>开/关开机自启。@returns 是否改成功</summary>
+    static bool SetAutoStart(bool on)
+    {
+        try
+        {
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKey))
+            {
+                if (key == null) return false;
+                if (on) key.SetValue(RunValue, "\"" + Application.ExecutablePath + "\" --tray");
+                else key.DeleteValue(RunValue, false);
+            }
+            Log("开机自启 -> " + (on ? "开" : "关"));
+            return true;
+        }
+        catch (Exception error)
+        {
+            Log("改开机自启失败：" + error.Message);
+            return false;
+        }
+    }
+
+    /// <summary>给页面用：查 / 改开机自启。</summary>
+    static string HandleAutoStart(string requestLine)
+    {
+        if (requestLine.IndexOf("/set-autostart") >= 0)
+        {
+            bool on = requestLine.IndexOf("on=1") >= 0 || requestLine.IndexOf("on=true") >= 0;
+            bool ok = SetAutoStart(on);
+            return "{\"ok\":" + (ok ? "true" : "false") + ",\"on\":" + (AutoStartOn() ? "true" : "false") + "}";
+        }
+        return "{\"on\":" + (AutoStartOn() ? "true" : "false") + "}";
+    }
 
     /// <summary>起一个小接口：收到 /pick-folder 就弹选择框，选完让服务端换根目录。</summary>
     static void StartTrayServer(Config config)
@@ -556,7 +677,8 @@ static class Launcher
                 {
                     try
                     {
-                        listener = new TcpListener(IPAddress.Loopback, TrayPort);
+                        allowedOrigin = "http://127.0.0.1:" + config.Port;
+                listener = new TcpListener(IPAddress.Loopback, TrayPort);
                         listener.ExclusiveAddressUse = false;
                         listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                         listener.Start();
@@ -575,9 +697,14 @@ static class Launcher
                     using (NetworkStream stream = client.GetStream())
                     {
                         string line = ReadRequestHead(stream);
-                        string body = "{\"ok\":false,\"error\":\"unknown path\"}";
-                        if (line != null && line.Contains("/pick-folder")) body = HandlePickFolder(config);
-                        else if (line != null && line.Contains("/pick-file")) body = HandlePickFile(config);
+                        string origin = line == null ? null : RequestOrigin(line);
+                        bool foreign = origin != null && origin.Length > 0 && origin != "null" && origin != allowedOrigin;
+                        if (foreign) Log("挡掉一个跨站请求，来源：" + origin);
+                        string body = foreign ? "{\"ok\":false,\"error\":\"cross-origin refused\"}"
+                            : line != null && line.Contains("/pick-folder") ? HandlePickFolder(config)
+                            : line != null && line.Contains("/pick-file") ? HandlePickFile(config)
+                            : line != null && line.Contains("autostart") ? HandleAutoStart(line)
+                            : "{\"ok\":false,\"error\":\"unknown path\"}";
                         WriteResponse(stream, body);
                     }
                 }
@@ -683,14 +810,25 @@ static class Launcher
         return sb.Length == 0 ? null : sb.ToString();
     }
 
-    /// <summary>回一个最小的 HTTP 响应（带 CORS，网页直接调也行）。</summary>
+    /// <summary>请求头里的 Origin（没有就返回 null）。</summary>
+    static string RequestOrigin(string head)
+    {
+        foreach (string raw in head.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.StartsWith("Origin:", StringComparison.OrdinalIgnoreCase)) return line.Substring(7).Trim();
+        }
+        return null;
+    }
+
+    /// <summary>回一个最小的 HTTP 响应（只允许我们自己的页面跨站调用）。</summary>
     static void WriteResponse(NetworkStream stream, string body)
     {
         byte[] payload = Encoding.UTF8.GetBytes(body);
         StringBuilder head = new StringBuilder();
         head.Append("HTTP/1.1 200 OK\r\n");
         head.Append("Content-Type: application/json; charset=utf-8\r\n");
-        head.Append("Access-Control-Allow-Origin: *\r\n");
+        head.Append("Access-Control-Allow-Origin: ").Append(allowedOrigin ?? "http://127.0.0.1").Append("\r\n");
         head.Append("Content-Length: ").Append(payload.Length).Append("\r\n");
         head.Append("Connection: close\r\n\r\n");
         byte[] headBytes = Encoding.ASCII.GetBytes(head.ToString());
@@ -716,6 +854,18 @@ static class Launcher
         SilentMode = true;
         Log("开始卸载：" + exeDir);
 
+        DialogResult answer = MessageBox.Show(
+            "要卸载 Markdown Observer 吗？\n\n"
+            + "· 会删掉程序文件、右键菜单、「打开方式」里的条目\n"
+            + "· 开机自动启动（如果开过）也会关掉\n\n"
+            + "你的 Markdown 文件不会被动。",
+            "Markdown Observer", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer != DialogResult.Yes) { Log("用户取消了卸载"); return 0; }
+
+        ProgressForm progress = new ProgressForm("正在卸载 Markdown Observer…");
+        progress.Show();
+        progress.Step("正在停止后台服务…", 1);
+
         // ① 先把服务和托盘停掉（托盘会占着 exe）
         try
         {
@@ -728,7 +878,35 @@ static class Launcher
         }
         catch (Exception error) { Log("停服务失败（继续）：" + error.Message); }
         SignalTrayQuit();
-        Thread.Sleep(1200);
+        /*
+          等托盘真的退干净再往下走。以前只 Sleep(1200) 就不管了——
+          托盘要是还没退，后面 rmdir 删不掉它的文件，它就一直活着（"卸载完托盘还在"就是这么来的）。
+          等不到就强杀，但绝不杀自己。
+        */
+        /*
+          等它自己退，**但不强杀**。
+          两个原因：① 被杀掉的托盘会在通知区留下"幽灵图标"；
+          ② 更重要的——"枚举进程并结束它"是恶意软件的动作，一个刚装上的新程序干这个，
+          行为监控会直接把它删掉（安装器上就踩过这个坑，见 setup.cs 的 StopRunning）。
+          真退不掉就在最后那句话里说清楚。
+        */
+        int me = Process.GetCurrentProcess().Id;
+        bool stubborn = false;
+        for (int i = 0; i < 24; i++)
+        {
+            Process[] alive = Process.GetProcessesByName("MarkdownObserver");
+            bool anyOther = false;
+            foreach (Process one in alive)
+            {
+                if (one.Id != me) anyOther = true;
+                one.Dispose();
+            }
+            if (!anyOther) break;
+            if (i == 23) stubborn = true;
+            Thread.Sleep(250);
+        }
+        if (stubborn) Log("还有进程没退干净，个别文件可能删不掉（不再强杀：那是恶意软件的动作）");
+        progress.Step("正在清理注册表…", 2);
 
         // ② 删注册表（右键菜单、"打开方式"、ProgID、Applications、以及"设置→应用"里这一条）
         string[] exts = new string[] { ".md", ".markdown", ".mdown", ".mkd" };
@@ -746,8 +924,58 @@ static class Launcher
             DeleteKey(Registry.CurrentUser, classes + "\\SystemFileAssociations\\" + ext + "\\shell\\MarkdownObserver");
         }
         DeleteKey(Registry.CurrentUser, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MarkdownObserver");
+        // 开机自启也要摘掉：留着的话，下次开机 Windows 会去启动一个已经不存在的程序
+        SetAutoStart(false);
+        /*
+          清掉 .md 的"默认打开方式"选择。
+          它记在 HKCU\...\Explorer\FileExts\.md\UserChoice 里，带一个防篡改哈希——
+          程序**改**不了（Windows 不让），但"整条删掉"是允许的，删掉就回到系统默认。
+          不删的话，卸载之后 .md 的图标和双击行为还指着一个已经不存在的程序。
+        */
+        foreach (string ext in exts)
+        {
+            try
+            {
+                string choiceKey = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\" + ext + "\\UserChoice";
+                using (RegistryKey choice = Registry.CurrentUser.OpenSubKey(choiceKey, false))
+                {
+                    if (choice == null) continue;
+                    string progId = Convert.ToString(choice.GetValue("ProgId"));
+                    if (progId == null || progId.IndexOf("MarkdownObserver", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                }
+                DeleteKey(Registry.CurrentUser, choiceKey);
+                Log("清掉了默认程序选择：" + ext);
+            }
+            catch (Exception error) { Log("清 FileExts 失败 " + ext + "：" + error.Message); }
+        }
+        // 告诉 Explorer "关联变了"，别等它自己发现（图标缓存也跟着刷）
+        SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
 
-        // ③ 删自己所在的目录：交给一个 detached 的 cmd，等一秒（那时本进程已经退了）
+        // 开始菜单快捷方式 + App Paths：不清的话，搜索里会留一个点不开的空壳
+        try
+        {
+            string lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Microsoft", "Windows", "Start Menu", "Programs", "Markdown Observer.lnk");
+            if (File.Exists(lnk)) File.Delete(lnk);
+        }
+        catch (Exception error) { Log("删快捷方式失败：" + error.Message); }
+        DeleteKey(Registry.CurrentUser, "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\MarkdownObserver.exe");
+
+        progress.Step("正在删除程序文件…", 3);
+        progress.Close();
+
+        // ③ 说一声再走（用户是从"设置 → 应用"点进来的，给个明确的收尾）
+        MessageBox.Show(
+            "Markdown Observer 卸载完成。\n\n"
+            + "· 右键菜单、「打开方式」里的条目都清掉了\n"
+            + "· 开机自动启动（如果开过）也关掉了\n\n"
+            + "你的 Markdown 文件一个都没动。"
+            + (stubborn
+                ? "\n\n⚠ 有一个进程没退干净，个别文件可能没删掉。\n重启后手动删掉这个目录即可：\n" + exeDir
+                : ""),
+            "Markdown Observer", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+        // ④ 删自己所在的目录：交给一个 detached 的 cmd，等一秒（那时本进程已经退了）
         try
         {
             string command = "ping -n 2 127.0.0.1 >nul & rmdir /s /q \"" + exeDir + "\"";
@@ -759,6 +987,7 @@ static class Launcher
             Process.Start(psi);
         }
         catch (Exception error) { Log("删目录失败：" + error.Message); }
+        Log("卸载完成");
         return 0;
     }
 
@@ -889,6 +1118,16 @@ static class Launcher
             trayHost.BeginInvoke((MethodInvoker)delegate { PickFolder(config); });
         });
         menu.MenuItems.Add("-");
+        menu.MenuItems.Add("卸载 Markdown Observer…", delegate(object s, EventArgs e)
+        {
+            // Windows 11 从"开始菜单 → 卸载"只会把你丢到设置的应用列表，还得自己搜一遍；
+            // 托盘上这一条是更顺手的入口（里面还会再确认一次）。
+            trayHost.BeginInvoke((MethodInvoker)delegate
+            {
+                Uninstall(Path.GetDirectoryName(Application.ExecutablePath));
+                Application.Exit();
+            });
+        });
         menu.MenuItems.Add("退出（同时停掉阅读器服务）", delegate(object s, EventArgs e)
         {
             StopService(config);
@@ -903,6 +1142,8 @@ static class Launcher
         };
         icon.Visible = true;
         Log("托盘起来了（端口 " + config.Port + "）");
+        // 自启项里存的是"当时那个 exe 的路径"：换了安装位置就失效了，所以每次起来顺手刷新一下
+        if (AutoStartOn()) SetAutoStart(true);
         StartTrayServer(config);   // 让服务端/网页能请它弹"选择文件夹"
 
         quitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEventName);
@@ -927,6 +1168,16 @@ static class Launcher
     /// n=时间戳 是为了让每次的地址都不一样——否则浏览器会跳到已经开着的那个同地址标签，
     /// 用户看到的就是"怎么还是刚才那篇"。
     /// </summary>
+    /// <summary>开始菜单/桌面快捷方式走这条：把服务叫起来（或接上已经在跑的那个），然后开阅读器。</summary>
+    static int OpenReaderMode(Config config)
+    {
+        Log("从快捷方式打开阅读器");
+        if (!ServiceAlive(config)) StartService(config, null);   // null = 只起服务，不打开具体哪一篇
+        EnsureTray(config);
+        OpenReader(config);
+        return 0;
+    }
+
     static void OpenReader(Config config)
     {
         OpenInBrowser("http://127.0.0.1:" + config.Port + "/?blank=1&n=" + DateTime.Now.Ticks);
@@ -1047,6 +1298,18 @@ static class Launcher
     /// <summary>托盘图标：优先用 exe 自己的图标；没有就现画一个（保证托盘上看得见东西）。</summary>
     static System.Drawing.Icon LoadAppIcon()
     {
+        // 第一选择：编在程序里的资源（跟 exe 放在哪儿无关，从 WSL 共享路径跑也没问题）
+        try
+        {
+            using (Stream stream = typeof(Launcher).Assembly.GetManifestResourceStream("AppIcon"))
+            {
+                if (stream != null) return new System.Drawing.Icon(stream);
+            }
+        }
+        catch
+        {
+            // 落到下面
+        }
         try
         {
             System.Drawing.Icon own = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
@@ -1268,5 +1531,97 @@ class Config
         string[] result = new string[Args.Length];
         for (int i = 0; i < Args.Length; i++) result[i] = Args[i].Replace("{file}", file);
         return result;
+    }
+}
+
+/// <summary>
+/// 一个极简的进度窗口：一行字 + 一条进度条。安装/卸载时让用户看见"正在做什么"。
+/// 每走一步调一次 Step()，里面用 DoEvents 把界面刷出来（这几步都跑在 UI 线程上）。
+/// </summary>
+class ProgressForm : Form
+{
+    readonly Label caption = new Label();
+    readonly SlimBar bar = new SlimBar();
+
+    public ProgressForm(string title)
+    {
+        Text = "Markdown Observer";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterScreen;
+        ControlBox = false;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ClientSize = new System.Drawing.Size(400, 150);
+        BackColor = System.Drawing.Color.White;
+        Font = new System.Drawing.Font("Microsoft YaHei UI", 9f);
+        try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+        Panel header = new Panel();
+        header.Dock = DockStyle.Top;
+        header.Height = 56;
+        header.Paint += delegate(object sender, PaintEventArgs e)
+        {
+            using (System.Drawing.Drawing2D.LinearGradientBrush brush = new System.Drawing.Drawing2D.LinearGradientBrush(
+                header.ClientRectangle, System.Drawing.Color.FromArgb(136, 198, 230), System.Drawing.Color.FromArgb(32, 107, 163), 0f))
+            {
+                e.Graphics.FillRectangle(brush, header.ClientRectangle);
+            }
+            using (System.Drawing.Font font = new System.Drawing.Font("Microsoft YaHei UI", 11f, System.Drawing.FontStyle.Bold))
+            using (System.Drawing.SolidBrush white = new System.Drawing.SolidBrush(System.Drawing.Color.White))
+            {
+                e.Graphics.DrawString("Markdown Observer", font, white, 18, 16);
+            }
+        };
+        Controls.Add(header);
+
+        caption.Text = title;
+        caption.AutoSize = true;
+        caption.ForeColor = System.Drawing.Color.FromArgb(28, 32, 40);
+        caption.Location = new System.Drawing.Point(22, 74);
+        Controls.Add(caption);
+
+        bar.Location = new System.Drawing.Point(24, 104);
+        bar.Width = 352;
+        Controls.Add(bar);
+    }
+
+    /// <summary>报一步。value = 已经做到第几步。</summary>
+    public void Step(string text, int value)
+    {
+        caption.Text = text;
+        bar.Set(value, 3);
+        Refresh();
+        Application.DoEvents();
+    }
+}
+
+/// <summary>自己画的细进度条（原生 ProgressBar 染不上色）。</summary>
+class SlimBar : Panel
+{
+    int value;
+    int max = 1;
+
+    public SlimBar()
+    {
+        Height = 6;
+        DoubleBuffered = true;
+    }
+
+    public void Set(int done, int total)
+    {
+        value = done;
+        max = Math.Max(1, total);
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(System.Drawing.Color.FromArgb(232, 236, 242));
+        int width = (int)(Width * Math.Min(1.0, (double)value / max));
+        if (width <= 0) return;
+        using (System.Drawing.SolidBrush brush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(32, 107, 163)))
+        {
+            e.Graphics.FillRectangle(brush, 0, 0, width, Height);
+        }
     }
 }

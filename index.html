@@ -236,7 +236,6 @@
         <input class="range" id="r-width" type="range" min="560" max="1000" step="10" aria-label="栏宽">
       </div>
       <div class="pop-row"><span class="label">代码块自动换行</span><button class="switch" id="sw-wrap" type="button" role="switch" aria-pressed="true" aria-label="代码块自动换行"></button></div>
-      <p class="pop-note">默认值就是 dsh 聊天正文的排版：16px/28px、栏宽 748px。</p>
     </div>
 
     <div class="pop-pane" id="pop-bg" hidden>
@@ -265,7 +264,13 @@
         <span class="label">双击 md 时新开标签页</span>
         <button class="switch" id="sw-opentab" type="button" role="switch" aria-pressed="false" aria-label="双击 md 时新开标签页"></button>
       </div>
-      <p class="pop-note">关着（默认）：双击打开的文件交给已经开着的阅读器标签页（左侧「打开的文档」里能切回去）；打开：每双击一次就新开一个浏览器标签。</p>
+      <p class="pop-note">关闭时（默认）双击 Markdown 打开新的阅读器标签页（左侧「打开的文档」）；打开时，双击 Markdown 打开新的浏览器标签页。</p>
+      <div class="pop-row" id="row-autostart">
+        <span class="label">开机自动启动</span>
+        <button class="switch" id="sw-autostart" type="button" role="switch" aria-pressed="false" aria-label="开机自动启动"></button>
+      </div>
+      <!-- 为什么值得开、代价是什么，都写在明面上（偷偷加自启最讨厌了） -->
+      <p class="pop-note" id="note-autostart">若关闭，第一次双击Markdown文件时需多等 1～2 秒。</p>
       <div class="pop-row">
         <span class="label">高级</span>
         <button class="btn tiny" id="btn-advanced" type="button" aria-expanded="false">展开</button>
@@ -273,7 +278,7 @@
       <div class="field" id="advanced-body" hidden>
         <div class="field-head"><span class="label">扫描时忽略的文件夹名</span><span class="hint-inline">一行一个</span></div>
         <textarea class="text-area" id="skip-dirs" rows="6" spellcheck="false" autocomplete="off" placeholder="node_modules&#10;.git&#10;dist"></textarea>
-        <p class="pop-note">扫描文件夹时跳过这些目录（以 . 开头的目录本来就跳过）。改完自动保存，服务端扫描和浏览器读取都按它来。</p>
+        <p class="pop-note">扫描文件夹时跳过这些目录（以 . 开头的目录默认跳过）。</p>
       </div>
     </div>
 

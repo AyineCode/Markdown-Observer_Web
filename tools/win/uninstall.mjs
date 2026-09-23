@@ -76,6 +76,8 @@ async function removeDir(path, label) {
 
 console.log('Markdown Observer - uninstall');
 console.log('- registry  ->');
+// 开机自启也摘掉：留着的话，下次开机 Windows 会去启动一个已经不存在的程序
+regDelete('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', 'Markdown Observer');
 regDelete(classes + '\\MarkdownObserver.md');
 const appKey = classes + '\\Applications\\' + EXE_NAME;
 regDelete(appKey);
@@ -85,6 +87,11 @@ for (const ext of EXTS) {
 }
 
 const installWin = (win('cmd.exe', ['/c', 'echo', '%LOCALAPPDATA%']) ?? '') + '\\MarkdownObserver';
+// 开始菜单快捷方式和 App Paths 也一起清掉（不然搜索里会留一个点不开的空壳）
+regDelete('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\MarkdownObserver.exe');
+const lnk = (win('cmd.exe', ['/c', 'echo', '%APPDATA%']) ?? '') + '\\Microsoft\\Windows\\Start Menu\\Programs\\Markdown Observer.lnk';
+if (DRY) console.log('  del ' + lnk);
+else win('cmd.exe', ['/c', 'del', '/f', '/q', lnk]);
 const installWsl = win('wslpath', ['-u', installWin]);
 console.log('- files     -> ' + installWin);
 let filesGone = true;

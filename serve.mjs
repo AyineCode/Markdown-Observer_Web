@@ -101,10 +101,17 @@ let lastOpened = null
  * 这是"这个服务能被网页指挥着读什么"的唯一围栏，别绕过它。
  */
 const ROOTS = []
-/** 把一个目录加进白名单（已经在里面、或者被某个已有的目录包住，就复用）。 */
+/**
+ * 把一个目录加进白名单。已经在里面、**或者被某个已有的目录包住**，就不再记一条
+ * （不然打开得越多，白名单越长，全是冗余的前缀）。
+ */
 function allow(dir) {
   const target = resolve(dir)
-  if (ROOTS.includes(target)) return target
+  if (isAllowed(target)) return target
+  // 反过来：新加的这个如果包住了某几条旧的，就把旧的去掉（保持白名单精简）
+  for (let i = ROOTS.length - 1; i >= 0; i -= 1) {
+    if (ROOTS[i].startsWith(target + sep)) ROOTS.splice(i, 1)
+  }
   ROOTS.push(target)
   return target
 }
@@ -274,12 +281,32 @@ function allowFolder(target) {
  * 浏览器连 127.0.0.1 时 Host 必然是 127.0.0.1:端口；被 DNS rebinding 骗来的请求
  * Host 会是攻击者的域名——那种一律拒绝。
  */
+/**
+ * 这个请求是不是"我们自己页面"发来的？
+ *
+ * 为什么需要：服务虽然只监听本机，但**任何网页**都能让浏览器朝 127.0.0.1:47821 发一个简单请求。
+ * 响应它读不到（我们不发 CORS 头），可是**动作会真的发生**——停掉服务、换根目录、改设置，
+ * 这就是典型的 CSRF。浏览器发跨站请求时一定带 Origin；本机命令行工具（curl、托盘）通常不带，
+ * 那种放行（能跑本机命令的人本来就能直接读文件）。
+ */
+function sameOrigin(req) {
+  const origin = req.headers.origin
+  if (origin === undefined || origin === '' || origin === 'null') return true
+  return origin === 'http://127.0.0.1:' + actualPort || origin === 'http://localhost:' + actualPort
+}
+
 function hostOk(req) {
   const host = req.headers.host
   if (typeof host !== 'string') return false
   const name = host.split(':')[0]
   return name === '127.0.0.1' || name === 'localhost' || name === '[::1]'
 }
+
+/*
+  会"改变状态"的接口：跨站请求一律拒绝（见 sameOrigin 的说明）。
+  别的接口不用管：跨站读不到响应（我们不发 CORS 头），能造成实际影响的只有这些动作。
+*/
+const MUTATING = new Set(['/api/open', '/api/root', '/api/pref', '/api/quit'])
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1')
@@ -289,6 +316,10 @@ const server = createServer(async (req, res) => {
   try {
     if (!hostOk(req)) {
       res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end('forbidden');
+      return;
+    }
+    if (MUTATING.has(pathname) && !sameOrigin(req)) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end('cross-origin request refused');
       return;
     }
 
@@ -355,8 +386,13 @@ const server = createServer(async (req, res) => {
     // ── 接口：读一个文件（正文）
     if (pathname === '/api/file') {
       const target = fromWire(url.searchParams.get('path') ?? '');
-      if (!isAllowed(target) || !MARKDOWN_EXT.has(extname(target).toLowerCase())) {
-        json(res, 400, { error: '路径不合法（不在允许的目录里）' });
+      if (!MARKDOWN_EXT.has(extname(target).toLowerCase())) {
+        json(res, 400, { error: '这个链接指的不是 markdown 文件：' + basename(target) });
+        return;
+      }
+      if (!isAllowed(target)) {
+        // 说清楚"为什么不让读"：这是安全边界，不是坏了
+        json(res, 400, { error: '这个文件不在你打开过的文件夹里，所以没打开：' + basename(target) });
         return;
       }
       const info = await stat(target);

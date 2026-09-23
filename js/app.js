@@ -636,7 +636,7 @@
       img.addEventListener('click', () => openLightbox(img.src));
     });
 
-    // ⑤ 链接：外链新窗口；站内锚点走平滑滚动
+    // ⑤ 链接：外链新窗口；站内锚点平滑滚动；站内的 .md 链接**在阅读器里打开**
     $$('.markdown a', content).forEach((a) => {
       const href = a.getAttribute('href') || '';
       if (/^https?:/i.test(href)) {
@@ -646,6 +646,19 @@
         a.addEventListener('click', (event) => {
           event.preventDefault();
           if (!scrollToAnchor(href.slice(1), true)) toast('找不到这一节：' + href);
+        });
+      } else if (MARKDOWN_LINK.test(href)) {
+        /*
+          站内的 markdown 链接，比如文档里写 [README](README.md)。
+          以前这里没接住（只认 http 和 #），浏览器就自己去请求那个 .md——
+          表现是"点一下下载了一个文件"；更要命的是**页面被导航走了**：
+          长连接一断，服务端就认为"没人在看"，从此每次都开新标签页，设置里怎么调都没用。
+        */
+        a.addEventListener('click', (event) => {
+          event.preventDefault();
+          const target = resolveDocLink(href);
+          if (target === null) { toast('这个链接指的文件打不开：' + href); return }
+          void openPath(target, true);
         });
       }
     });
@@ -1341,6 +1354,8 @@
       serverOpenMode = next.openMode;   // 这一项存在服务端（它才是决定往哪儿推的人）
       syncControls();
     }
+    // 开机自启由托盘管：问它一句当前状态（问不到就把那一项收起来）
+    if (next.canNativeDialog === true) void loadAutoStart();
     if (Array.isArray(next.skipDirs)) {
       serverSkipDirs = next.skipDirs;
       $('skip-dirs').value = next.skipDirs.join('\n');
@@ -1805,6 +1820,47 @@
     }
   }
 
+  /** 文档里指向另一个 markdown 的链接（相对/绝对都算；http 与 # 走别的分支）。 */
+  const MARKDOWN_LINK = /\.(md|markdown|mdown|mkd|txt)([?#].*)?$/i;
+
+  /**
+   * 把文档里的相对链接解成"读者认的路径"：
+   *   · 服务模式：当前这篇是绝对路径，解出来也是绝对路径（服务端按白名单校验）
+   *   · 文件夹模式：解出来是文件夹内的相对路径
+   * @param {string} href 链接里写的那一串
+   * @returns {string|null} 当前这篇没有路径（比如内置示例）就返回 null
+   */
+  function resolveDocLink(href) {
+    const doc = currentDoc;
+    if (doc === null || typeof doc.path !== 'string') return null;
+    const clean = href.replace(/[?#].*$/, '');
+    if (clean.startsWith('/')) return normalizePath(clean);
+    const dir = doc.path.replace(/[\\/][^\\/]*$/, '');
+    return normalizePath(dir + '/' + clean);
+  }
+
+  /**
+   * 把 a/../b/./c 这种路径理平。三件事要小心：
+   *   · 盘符（C:）原样留着；
+   *   · 开头的斜杠代表的"绝对"要留着；
+   *   · **UNC 路径（\\\\wsl.localhost\\Ubuntu\\… 或 //server/share）开头是**两个**斜杠**——
+   *     少写一个就变成了另一个路径（以前就栽在这：\wsl.localhost 被理成 /wsl.localhost，
+   *     于是文档里打开过的文件，链接怎么也跳不过去）。
+   */
+  function normalizePath(path) {
+    const drive = /^[A-Za-z]:/.test(path) ? path.slice(0, 2) : '';
+    const body = drive === '' ? path : path.slice(2);
+    const unc = /^[\\/]{2}/.test(body);
+    const absolute = unc || body.startsWith('/') || body.startsWith('\\');
+    const parts = [];
+    for (const segment of body.split(/[\\/]/)) {
+      if (segment === '' || segment === '.') continue;
+      if (segment === '..') { parts.pop(); continue }
+      parts.push(segment);
+    }
+    return drive + (unc ? '//' : absolute ? '/' : '') + parts.join('/');
+  }
+
   /**
    * 从地址栏读出要打开什么：
    *   ?file=路径   要打开的那一篇（旧格式 #路径 也认）
@@ -2075,6 +2131,10 @@
     $('sw-serif').setAttribute('aria-pressed', String(settings.serif));
     $('sw-wrap').setAttribute('aria-pressed', String(settings.wrapCode));
     $('sw-opentab').setAttribute('aria-pressed', String(serverOpenMode === 'tab'));
+    // 托盘不在就整行收起来（这一项只有托盘能改）
+    $('row-autostart').hidden = serverAutoStart === null;
+    $('note-autostart').hidden = serverAutoStart === null;
+    $('sw-autostart').setAttribute('aria-pressed', String(serverAutoStart === true));
     renderRecents();
   }
 
@@ -2085,6 +2145,36 @@
    * 所以改完要 POST 过去，不能只写浏览器的 localStorage。
    * @param {'reuse'|'tab'} mode reuse = 复用开着的页面；tab = 每次新开标签页
    */
+  /**
+   * 开机自启：真正的开关在托盘的注册表里（HKCU\...\Run，不需要管理员），
+   * 网页直接问托盘——它就在 Windows 上，而服务端可能跑在 WSL 里。
+   * 托盘不在（比如用 file:// 打开）就把这一项收起来，不给一个按了没反应的开关。
+   */
+  let serverAutoStart = null;
+
+  async function loadAutoStart() {
+    try {
+      const res = await fetch('http://127.0.0.1:47822/autostart', { signal: AbortSignal.timeout(3000) });
+      const data = await res.json();
+      serverAutoStart = data !== null && data.on === true;
+    } catch {
+      serverAutoStart = null;
+    }
+    syncControls();
+  }
+
+  async function setAutoStart(on) {
+    try {
+      const res = await fetch('http://127.0.0.1:47822/set-autostart?on=' + (on ? '1' : '0'), { signal: AbortSignal.timeout(5000) });
+      const data = await res.json();
+      serverAutoStart = data !== null && data.on === true;
+      toast(serverAutoStart ? '已设为开机自动启动' : '已取消开机自动启动');
+    } catch {
+      toast('没能改开机自启（托盘没在跑？）');
+    }
+    syncControls();
+  }
+
   async function setOpenMode(mode) {
     serverOpenMode = mode;
     syncControls();
@@ -2332,6 +2422,9 @@
       $('btn-advanced').setAttribute('aria-expanded', String(!body.hidden));
     });
     $('skip-dirs').addEventListener('change', () => { void saveSkipDirs(); });
+    $('sw-autostart').addEventListener('click', () => {
+      void setAutoStart(serverAutoStart !== true);
+    });
     $('sw-opentab').addEventListener('click', () => {
       void setOpenMode(serverOpenMode === 'tab' ? 'reuse' : 'tab');
     });

@@ -69,6 +69,17 @@ if (process.argv.includes('--check')) {
 
 // 输出先放临时目录：Windows 程序往 WSL 的 UNC 路径写文件不一定被允许，失败再退回来。
 const staging = join(process.env.TEMP ?? '/tmp', 'MarkdownObserver.exe');
+/*
+  图标：工具条、任务管理器、资源管理器里显示的就是它。
+  想换图标有两种办法（README 里也写了）：
+    · 改 tools/win/make-icon.mjs 里的配色/笔画，跑 node tools/win/make-icon.mjs 重新生成；
+    · 或者拿你自己的 .ico 覆盖 tools/win/markdown-observer.ico（多尺寸的 .ico 最好）。
+  也可以临时指定别的文件：node build-launcher.mjs --icon <路径.ico>
+*/
+const iconFlag = process.argv.indexOf('--icon');
+const iconPath = iconFlag >= 0 && process.argv[iconFlag + 1] !== undefined
+  ? resolve(process.argv[iconFlag + 1])
+  : join(HERE, 'markdown-observer.ico');
 const args = [
   '/nologo',
   '/target:winexe',        // winexe = 双击时不弹控制台窗口
@@ -78,6 +89,25 @@ const args = [
   '/r:System.Windows.Forms.dll',
   toWindowsPath(SOURCE),
 ];
+if (existsSync(iconPath)) {
+  args.push('/win32icon:' + toWindowsPath(iconPath));
+  /*
+    再作为程序内资源编一份：窗口图标（托盘菜单、卸载进度窗）从资源里读，
+    比 ExtractAssociatedIcon 可靠——后者要靠外壳去读路径，从 \\wsl.localhost\... 上会失败。
+    csc 的 /resource: 不认 UNC，所以先用 cmd 搬到 Windows 本地临时目录。
+  */
+  try {
+    const winTemp = execFileSync('cmd.exe', ['/c', 'echo', '%TEMP%'], { encoding: 'utf8' }).replace(/\r?\n/g, '').trim();
+    const iconLocal = winTemp + '\\markdown-observer-icon.ico';
+    execFileSync('cmd.exe', ['/c', 'copy', '/y', toWindowsPath(iconPath), iconLocal], { stdio: 'ignore' });
+    args.push('/resource:' + iconLocal + ',AppIcon');
+  } catch (error) {
+    console.warn('icon resource skipped: ' + error.message);
+  }
+  console.log('icon: ' + iconPath);
+} else {
+  console.log('icon: (none, using the default .NET icon) - run make-icon.mjs to create one');
+}
 
 let built = false;
 try {
