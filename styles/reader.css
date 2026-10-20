@@ -1077,3 +1077,22 @@ body[data-sidebar='closed'] .sidebar-pull {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── 打开的文档：拖动排序（像浏览器标签页） ── */
+.doc-row.dragging {
+  opacity: .45;
+}
+
+/* 插入位置用内阴影画一条线：不占布局，不引起回流跳动 */
+.doc-row.drop-before {
+  box-shadow: inset 0 2px 0 var(--dsw-alias-state-business-primary);
+}
+
+.doc-row.drop-after {
+  box-shadow: inset 0 -2px 0 var(--dsw-alias-state-business-primary);
+}
+
+/* 行为页里"只在服务端模式下有意义"的项：其它模式收起来 */
+body[data-server='false'] .server-only {
+  display: none;
+}
