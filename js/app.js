@@ -110,6 +110,7 @@
     leading: 1,           // 行距倍数
     width: 748,           // 阅读栏宽（748 = dsh 聊天正文宽度）
     wrapCode: true,       // 代码块是否自动换行（dsh 默认换行）
+    copyMode: 'markdown', // 复制选中内容：markdown（源码）| rich（带格式+源码）| text（渲染后的纯文本）
     sidebar: true,        // 侧栏展开/收起（视图状态，但记住更省事）
     bgMode: 'none',       // none（极简的黑白渐变）| preset（内置渐变）| image（自己的图）
     bgPreset: 'aurora',   // 选 preset 时才用得上：见下面 PRESETS 的第一项
@@ -121,6 +122,8 @@
   }
 
   let settings = Object.assign({}, DEFAULTS)
+/** 正在拖动的那一行「打开的文档」（null = 没在拖）。 */
+let draggingDocId = null;
   let bgImage = null;   // 当前背景图的 dataURL（从 IndexedDB 取出来缓存在内存里）
 
   /*
@@ -795,6 +798,138 @@
     if (currentDoc === null) return;
     await host.fixImages($$('.markdown img', content), currentDoc.path);
   }
+
+  // ─────────────────────────── 5.9 复制：选中什么，就复制成什么 ───────────────────────────
+
+  /*
+    预览里选中的是**渲染结果**，直接 Ctrl+C 拿到的是排版后的文字；公式最典型：
+    KaTeX 同时产生可见字形和隐藏的 MathML，复制出来两套混在一起，粘到别处没法用。
+    这里把选区翻译回 **markdown 源码**，公式从 KaTeX 的 annotation 里取回原始 TeX。
+  */
+  /** 从一个 KaTeX 元素里取回原始 TeX。 */
+  function texOf(node) {
+    const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
+    if (annotation === null) return null;
+    const tex = annotation.textContent.trim();
+    if (tex === '') return null;
+    const display = node.closest('.katex-display') !== null;
+    const fence = String.fromCharCode(36);           // "$"，避开模板/替换里的 $ 语义
+    return display ? fence + fence + tex + fence + fence : fence + tex + fence;
+  }
+
+  /** 行内内容 → markdown。 */
+  function inlineMd(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const el = node;
+    if (el.classList.contains('katex') || el.classList.contains('katex-display')) {
+      const tex = texOf(el);
+      return tex === null ? el.textContent : tex;
+    }
+    const inner = () => Array.from(el.childNodes).map(inlineMd).join('');
+    const fence = String.fromCharCode(96);           // 反引号
+    switch (el.tagName) {
+      case 'BR': return '\n';
+      case 'STRONG': case 'B': return '**' + inner().trim() + '**';
+      case 'EM': case 'I': return '*' + inner().trim() + '*';
+      case 'DEL': case 'S': return '~~' + inner().trim() + '~~';
+      case 'CODE': return fence + el.textContent + fence;
+      case 'A': return '[' + inner() + '](' + (el.getAttribute('href') === null ? '' : el.getAttribute('href')) + ')';
+      case 'IMG': return '![' + (el.getAttribute('alt') === null ? '' : el.getAttribute('alt')) + '](' + (el.getAttribute('src') === null ? '' : el.getAttribute('src')) + ')';
+      default: return inner();
+    }
+  }
+
+  /** 一个块级元素 → markdown。 */
+  function blockMd(el) {
+    if (el.nodeType === Node.TEXT_NODE) return el.textContent.trim();
+    if (el.nodeType !== Node.ELEMENT_NODE) return '';
+    const tag = el.tagName;
+    if (/^H[1-6]$/.test(tag)) return '#'.repeat(Number(tag[1])) + ' ' + inlineMd(el).trim();
+    if (tag === 'HR') return '---';
+    if (tag === 'BLOCKQUOTE') {
+      return blockChildren(el).join('\n\n').split('\n').map((line) => '> ' + line).join('\n');
+    }
+    if (tag === 'PRE') {
+      const code = el.querySelector('code');
+      const raw = code === null ? el.textContent : code.textContent;
+      const langClass = code === null ? undefined : Array.from(code.classList).find((name) => name.startsWith('language-'));
+      const info = el.closest('.md-code-block');
+      const banner = info === null ? null : info.querySelector('.infostring');
+      const language = langClass !== undefined ? langClass.slice('language-'.length)
+        : (banner === null ? '' : banner.textContent.trim());
+      const fence = String.fromCharCode(96).repeat(3);
+      return fence + language + '\n' + raw.replace(/\n$/, '') + '\n' + fence;
+    }
+    if (tag === 'UL' || tag === 'OL') {
+      const items = Array.from(el.children).filter((child) => child.tagName === 'LI');
+      return items.map((item, index) => {
+        const check = item.querySelector('input[type=checkbox]');
+        const box = check === null ? '' : (check.checked ? '[x] ' : '[ ] ');
+        const body = blockChildren(item).join('\n\n').trim();
+        const marker = tag === 'OL' ? (index + 1) + '. ' : '- ';
+        return marker + box + body.replace(/\n/g, '\n  ');
+      }).join('\n');
+    }
+    if (tag === 'TABLE') {
+      const rows = Array.from(el.querySelectorAll('tr'));
+      if (rows.length === 0) return '';
+      const cells = (row) => Array.from(row.children).map((cell) => inlineMd(cell).trim().replace(/\|/g, '\\|'));
+      const head = cells(rows[0]);
+      const grid = ['| ' + head.join(' | ') + ' |', '| ' + head.map(() => '---').join(' | ') + ' |'];
+      for (const row of rows.slice(1)) grid.push('| ' + cells(row).join(' | ') + ' |');
+      return grid.join('\n');
+    }
+    if (tag === 'DIV' && el.classList.contains('tableScroll')) return blockChildren(el).join('\n\n');
+    if (tag === 'P' || tag === 'LI') return inlineMd(el).trim();
+    return blockChildren(el).join('\n\n');
+  }
+
+  /** 一个容器里的所有块 → markdown。 */
+  function blockChildren(container) {
+    const out = [];
+    for (const child of Array.from(container.childNodes)) {
+      const text = blockMd(child);
+      if (text !== '') out.push(text);
+    }
+    return out;
+  }
+
+  /** 选区 → markdown。同一个文本节点内的小选区按字符精确取。 */
+  function selectionMarkdown(range) {
+    const start = range.startContainer;
+    if (start === range.endContainer && start.nodeType === Node.TEXT_NODE) {
+      return start.textContent.slice(range.startOffset, range.endOffset);
+    }
+    const out = [];
+    for (const block of Array.from(content.children)) {
+      if (!range.intersectsNode(block)) continue;
+      const text = blockMd(block);
+      if (text !== '') out.push(text);
+    }
+    return out.join('\n\n');
+  }
+
+  document.addEventListener('copy', (event) => {
+    if (settings.copyMode === 'text') return;            // 保持原样：交给浏览器
+    const selection = window.getSelection();
+    if (selection === null || selection.isCollapsed || selection.rangeCount === 0) return;
+    if (!content.contains(selection.anchorNode) || !content.contains(selection.focusNode)) return;   // 只管正文选区
+    let markdown = '';
+    try {
+      markdown = selectionMarkdown(selection.getRangeAt(0));
+    } catch {
+      return;   // 选区跨了奇怪的东西：退回浏览器默认行为
+    }
+    if (markdown === '') return;
+    event.clipboardData.setData('text/plain', markdown);
+    if (settings.copyMode === 'rich') {
+      const holder = document.createElement('div');
+      holder.appendChild(selection.getRangeAt(0).cloneContents());
+      event.clipboardData.setData('text/html', holder.innerHTML);
+    }
+    event.preventDefault();
+  });
 
   // ─────────────────────────── 6. 目录 / 进度 / 位置记忆 / 搜索 ───────────────────────────
 
@@ -1554,6 +1689,25 @@
     for (const doc of docs) {
       const row = document.createElement('div');
       row.className = 'row doc-row' + (doc.id === activeDocId ? ' active' : '');
+      /*
+        拖动排序（像浏览器标签页）：拿起一行、拖到另一行上松手，插到它的前/后半区。
+        用原生 HTML5 拖拽，不引库。行里的打开/关闭按钮照旧可点。
+      */
+      row.draggable = true;
+      row.dataset.docId = doc.id;
+      row.addEventListener('dragstart', (event) => {
+        draggingDocId = doc.id;
+        row.classList.add('dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', doc.name);   // 不设数据有些浏览器不让拖
+        event.stopPropagation();
+      });
+      row.addEventListener('dragend', () => {
+        draggingDocId = null;
+        document.body.classList.remove('dropping');   // 兜底：拖行时不该留着"松手打开文件"的提示
+        row.classList.remove('dragging');
+        for (const node of $$('.doc-row.drop-before, .doc-row.drop-after')) node.classList.remove('drop-before', 'drop-after');
+      });
 
       const open = document.createElement('button');
       open.type = 'button';
@@ -2171,6 +2325,8 @@
 
   /** 把设置回填到所有控件（重置后要用）。 */
   function syncControls() {
+    // 复制模式的三选一：点了就要立刻看到哪个是激活的（放在这里，别放在 applyTheme 里）
+    $$('[data-copy]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.copy === settings.copyMode)));
     for (const field of FIELDS) {
       $(field.range).value = String(settings[field.key]);
       $(field.num).value = String(field.toUi(settings[field.key]));
@@ -2289,11 +2445,12 @@
     // 那句"目录特别大…"只对纯浏览器模式有意义：服务模式是服务端扫描，快得多
     $('empty-note').hidden = host.id === 'server';
     // 「行为」那一页里只有"双击时新开标签页"，而这一项存在服务端——别的模式整页收起来
-    const actTab = $('tab-act');
-    if (actTab.hidden !== (host.id !== 'server')) {
-      actTab.hidden = host.id !== 'server';
-      if (actTab.hidden) setSettingsTab('type');
-    }
+    /*
+      行为页现在也放"复制选中内容"（跟服务端无关），所以一直留着；
+      里面那些服务端专用项（双击新开标签、开机自启、扫描忽略目录）用 .server-only 收起来。
+    */
+    $('tab-act').hidden = false;
+    document.body.dataset.server = String(host.id === 'server');
     if (host.id === 'folder' && host.count > 0) {
       $('empty-sub').textContent = '左侧已经列出这个文件夹里的 ' + host.count + ' 篇文档——点一篇就开始读。';
     } else if (hasListing) {
@@ -2437,10 +2594,48 @@
     toast('已恢复默认设置');
   }
 
+  /** 把拖动中的那一行插到 target 的前面或后面（target 为 null = 放到最后）。 */
+  function moveDoc(draggingId, targetId, after) {
+    const from = docs.findIndex((doc) => doc.id === draggingId);
+    if (from === -1) return;
+    const [moved] = docs.splice(from, 1);
+    let to = targetId === null ? docs.length : docs.findIndex((doc) => doc.id === targetId);
+    if (to === -1) to = docs.length;
+    else if (after) to += 1;
+    docs.splice(to, 0, moved);
+    renderDocList();
+  }
+
   function bindControls() {
     bindSwitch('sw-serif', 'serif', applyReading);
     bindSwitch('sw-wrap', 'wrapCode', applyReading);
 
+    // 打开的文档：拖动排序。监听挂在容器上（行是重画出来的，逐个绑会漏）
+    const docList = $('doc-list');
+    docList.addEventListener('dragover', (event) => {
+      if (draggingDocId === null) return;
+      event.preventDefault();          // 表示这里可以放下
+      event.stopPropagation();         // 别让窗口级的拖放（拖文件进窗口）也来处理
+      for (const node of $$('.doc-row.drop-before, .doc-row.drop-after')) node.classList.remove('drop-before', 'drop-after');
+      const row = event.target.closest === undefined ? null : event.target.closest('.doc-row');
+      if (row === null) return;
+      const rect = row.getBoundingClientRect();
+      row.classList.add(event.clientY > rect.top + rect.height / 2 ? 'drop-after' : 'drop-before');
+    });
+    docList.addEventListener('drop', (event) => {
+      if (draggingDocId === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const row = event.target.closest === undefined ? null : event.target.closest('.doc-row');
+      if (row === null) { moveDoc(draggingDocId, null, false); return }
+      const rect = row.getBoundingClientRect();
+      moveDoc(draggingDocId, row.dataset.docId, event.clientY > rect.top + rect.height / 2);
+    });
+    $$('[data-copy]').forEach((btn) => btn.addEventListener('click', () => {
+      settings.copyMode = btn.dataset.copy;
+      saveSettings();
+      syncControls();
+    }));
     $$('[data-theme]').forEach((btn) => btn.addEventListener('click', () => setTheme(btn.dataset.theme)));
     $$('[data-theme-opt]').forEach((btn) => btn.addEventListener('click', () => setTheme(btn.dataset.themeOpt)));
 
@@ -2575,18 +2770,26 @@
 
   /** 拖放：.md 打开，图片设为背景。 */
   function bindDnd() {
+    // 记住"这一下是不是我们自己那一行在拖"：是的话，窗口级的拖文件逻辑一律不参与
+    const internal = () => draggingDocId !== null;
     let depth = 0;
     window.addEventListener('dragenter', (event) => {
+      if (internal()) return;        // 拖的是我们自己的文档行：窗口级拖放不参与
       event.preventDefault();
       depth += 1;
       document.body.classList.add('dropping');
     });
-    window.addEventListener('dragover', (event) => { event.preventDefault() });
+    window.addEventListener('dragover', (event) => {
+      if (internal()) return;
+      event.preventDefault();
+    });
     window.addEventListener('dragleave', () => {
+      if (internal()) return;
       depth = Math.max(0, depth - 1);
       if (depth === 0) document.body.classList.remove('dropping');
     });
     window.addEventListener('drop', (event) => {
+      if (internal()) return;
       event.preventDefault();
       depth = 0;
       document.body.classList.remove('dropping');
